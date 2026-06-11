@@ -7,16 +7,21 @@ overrides the class accordingly.
 Currently implemented for the instSeg / cellasic vocabulary
     (single-cell, clump, debris).
 
-Three rules, applied in priority order (debris > clump):
+Three rules applied after the primary segmentation model assigns labels.
+The model's own ``debris`` class (image artifacts, non-biological objects)
+is left untouched; the rules add two biologically distinct new classes:
 
-  R1 — spaghetti → debris
+  R1 — filamentation → long
         single-cell with extreme elongation (high AR) AND irregular boundary
-        (low solidity).  Normal stressed/elongated rods are elongated but
-        smooth; spaghetti forms are bent/tangled.
+        (low solidity).  Normal stressed/elongated rods stay single-cell;
+        spaghetti forms (bent/tangled, growth without separation) become
+        ``long``.  These cells are biologically meaningful and must pass
+        through the PI classifier normally — they may or may not be dying.
 
-  R2 — lysis / explosion → debris
+  R2 — lysis / explosion → lyse
         single-cell or clump with very low solidity AND area above the
-        noise floor.  Fragmented, burst cells have highly irregular masks.
+        noise floor.  Ruptured cells have highly irregular masks.  PI signal
+        may have diffused post-lysis so they also go through the classifier.
 
   R3 — merged detection → clump
         single-cell whose mask skeleton has branch points (dumbbell shape
@@ -128,7 +133,7 @@ def apply_instSeg_morphology_corrections(
 
     Returns:
         Tuple of (updated DataFrame, correction counts dict).
-        Counts keys: spaghetti_to_debris, lysed_to_debris, merged_to_clump.
+        Counts keys: filamented_to_long, lysed_to_lyse, merged_to_clump.
     """
     fl = _add_aspect_ratio(fl_measurements)
     fl = _add_skeleton_features(fl, labeled_mask)
@@ -137,17 +142,21 @@ def apply_instSeg_morphology_corrections(
     sc_areas = fl.loc[fl["object_class"] == "single-cell", "area"]
     median_area = sc_areas.median() if len(sc_areas) > 0 else fl["area"].median()
 
-    # R1: spaghetti → debris
+    # R1: filamentation → long
     # High AR catches extreme elongation; low solidity ensures the shape is
     # bent/tangled rather than a straight stressed rod (which stays single-cell).
+    # "long" cells are biologically meaningful — growth without separation.
+    # They may or may not die and must go through the PI classifier normally.
     r1 = (
         (fl["object_class"] == "single-cell")
         & (fl["aspect_ratio"] > spaghetti_ar)
         & (fl["solidity"] < spaghetti_solidity)
     )
 
-    # R2: lysis / explosion → debris
+    # R2: lysis / explosion → lyse
     # Very low solidity (fragmented boundary) + non-trivial area (not just noise).
+    # "lyse" cells have ruptured membranes; PI signal may have diffused so they
+    # still go through the PI classifier rather than being hard-coded piPOS.
     r2 = (
         fl["object_class"].isin(["single-cell", "clump"])
         & (fl["solidity"] < lysis_solidity)
@@ -157,7 +166,7 @@ def apply_instSeg_morphology_corrections(
     # R3: merged detection → clump
     # Skeleton branch points flag a multi-cell cluster (the skeleton forks at
     # cell junctions).  The solidity floor (> 0.70) excludes fragmented masses
-    # that also have many branch points but should be debris not clump.
+    # that also have many branch points but should be lyse not clump.
     # Note: end-to-end two-cell linear merges have 0 branch points and are
     # NOT caught by this rule — the model's own clump class handles them.
     r3 = (
@@ -167,12 +176,13 @@ def apply_instSeg_morphology_corrections(
         & (fl["solidity"] > 0.70)
     )
 
-    fl.loc[r3, "object_class"] = "clump"           # applied first
-    fl.loc[r1 | r2, "object_class"] = "debris"     # overrides clump if overlap
+    fl.loc[r3, "object_class"] = "clump"    # applied first
+    fl.loc[r1, "object_class"] = "long"     # filamented cells
+    fl.loc[r2 & ~r1, "object_class"] = "lyse"  # lysed/exploded cells
 
     counts: Dict[str, int] = {
-        "spaghetti_to_debris": int(r1.sum()),
-        "lysed_to_debris": int((r2 & ~r1).sum()),
+        "filamented_to_long": int(r1.sum()),
+        "lysed_to_lyse": int((r2 & ~r1).sum()),
         "merged_to_clump": int((r3 & ~r1 & ~r2).sum()),
     }
     return fl, counts

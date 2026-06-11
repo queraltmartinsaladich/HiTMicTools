@@ -361,8 +361,8 @@ class ASCT_instSeg(BasePipeline):
         )
         img_logger.info(
             f"4.4 - Morphology corrections: "
-            f"{morph_counts['spaghetti_to_debris']} spaghetti→debris, "
-            f"{morph_counts['lysed_to_debris']} lysed→debris, "
+            f"{morph_counts['filamented_to_long']} filamented→long, "
+            f"{morph_counts['lysed_to_lyse']} lysed→lyse, "
             f"{morph_counts['merged_to_clump']} single-cell→clump"
         )
 
