@@ -1,6 +1,6 @@
 """ASCT pipeline for CellAsic Onix2 microfluidic data.
 
-Same as ASCT_scsegm but adds a target-line crop step after focus
+Same as ASCT_instSeg but adds a target-line crop step after focus
 restoration and before segmentation. The crop:
 
   1. Detects the ID-block fiducial (dice-face-5 for line 5) via Sobel-edge
@@ -18,14 +18,14 @@ tracks the slow stage drift across the time-lapse, so line 5 stays
 centred from frame 0 to the last frame. Set `cellasic_per_frame_crop:
 False` to fall back to the legacy single-frame (frame-0) crop.
 
-Why this pipeline exists: the ASCT_scsegm pipeline runs on agarose-pad
+Why this pipeline exists: the ASCT_instSeg pipeline runs on agarose-pad
 data where the FOV is one big homogeneous well. CellAsic FOVs contain
 adjacent trap rows ("lines") whose pillars and IDs look enough like
 bacteria to confuse the segmenter. Running v8_2 (line-5-aware
 checkpoint) on uncropped CellAsic FOVs would be out-of-distribution and
 would produce false detections on lines 4 and 6.
 
-Config additions vs ASCT_scsegm:
+Config additions vs ASCT_instSeg:
     crop_to_target_line: bool (default True)
         Toggle the crop step. Set False to debug the rest of the
         pipeline without changing image dimensions.
@@ -71,7 +71,10 @@ from HiTMicTools.pipelines.base_pipeline import BasePipeline
 from HiTMicTools.img_processing.img_processor import ImagePreprocessor
 from HiTMicTools.img_processing.array_ops import convert_image
 from HiTMicTools.img_processing.img_ops import measure_background_intensity
-from HiTMicTools.img_processing.mask_ops import map_predictions_to_labels_by_frame
+from HiTMicTools.img_processing.mask_ops import (
+    map_predictions_to_labels_by_frame,
+    apply_fl_union_mask,
+)
 from HiTMicTools.img_processing.cellasic import (
     crop_with_calibration,
     crop_with_calibration_per_frame,
@@ -90,14 +93,14 @@ from jetraw_tools.image_reader import ImageReader
 class ASCT_cellasic(BasePipeline):
     """ASCT pipeline for CellAsic Onix2 microfluidic chambers.
 
-    Identical to ASCT_scsegm except for one inserted step (2.5) that
+    Identical to ASCT_instSeg except for one inserted step (2.5) that
     crops the (T, C, Y, X) stack to the target line strip after focus
     restoration. Everything else -- background correction, alignment,
     segmentation, measurements, tracking, PI classification, export -- is
     unchanged.
     """
 
-    # Models required by this pipeline (same as ASCT_scsegm)
+    # Models required by this pipeline (same as ASCT_instSeg)
     required_models = {"bf_focus", "fl_focus", "sc_segmenter", "pi_classification"}
 
     def analyse_image(
@@ -138,25 +141,27 @@ class ASCT_cellasic(BasePipeline):
         img = img.reshape(nFrames, nChannels, size_x, size_y)
         ip = ImagePreprocessor(img, stack_order="TCXY")
         img = np.zeros((1, 1, 1, 1))
-
-        # 2.1 Remove background
-        img_logger.info("2.1 - Preprocessing image", show_memory=True)
         img_logger.info(f"Preprocessed image shape: {ip.img.shape}")
 
-        # 2.2 Align frames if required
+        # 2.1 Align frames if required
         if align_frames:
-            img_logger.info("2.2 - Aligning frames in the stack", show_memory=True)
+            img_logger.info("2.1 - Aligning frames in the stack", show_memory=True)
             ip.align_image(
                 ref_channel=0, ref_slice=-1, crop_image=True, reference_type="dynamic"
             )
-            img_logger.info("2.2 - Frame alignment completed", show_memory=True)
+            img_logger.info("2.1 - Frame alignment completed", show_memory=True)
         size_x, size_y = ip.img.shape[-2], ip.img.shape[-1]
-        img_logger.info("2.3 - Detecting and fixing border wells")
-        ip.detect_fix_well(nchannels=0, nslices=0, nframes=range(nFrames))
-        img_logger.info(
-            f"Reference channel intensity before background removal:\n{self.check_px_values(ip, reference_channel, round=3)}"
+
+        # 2.2 Detect and fix well borders (both BF and FL channels)
+        img_logger.info("2.2 - Detecting and fixing border wells")
+        ip.detect_fix_well(
+            nchannels=[reference_channel, pi_channel], nslices=0, nframes=range(nFrames)
         )
 
+        # 2.3 Background removal
+        img_logger.info(
+            f"2.3 - Background removal | BF mean before: {self.check_px_values(ip, reference_channel, round=3)}"
+        )
         self.clear_background(
             ip,
             channel=reference_channel,
@@ -167,6 +172,7 @@ class ASCT_cellasic(BasePipeline):
         self.clear_background(
             ip, channel=pi_channel, nFrames=range(nFrames), method=method
         )
+        img_logger.info("2.3 - Background removal completed", show_memory=True)
 
         # 2.4 Focus restoration (conditional)
         if getattr(self, "focus_correction", True):
@@ -210,7 +216,7 @@ class ASCT_cellasic(BasePipeline):
         # 2.5 CellAsic target-line crop --------------------------------
         # Detect the ID-block fiducial on the focus-restored BF channel,
         # compute the small tilt, rotate, and crop to the target line.
-        # This is the only step that differs from ASCT_scsegm.
+        # This is the only step that differs from ASCT_instSeg.
         if getattr(self, "crop_to_target_line", True):
             img_logger.info("2.5 - Cropping to target line (CellAsic)", show_memory=True)
 
@@ -242,7 +248,7 @@ class ASCT_cellasic(BasePipeline):
                 img_logger.info("  using built-in default line-5 calibration")
 
             # ip.img has shape (T, S, C, dim2, dim3) with S=1 in this
-            # pipeline. ASCT_scsegm's reshape uses (T, C, size_x, size_y)
+            # pipeline. ASCT_instSeg's reshape uses (T, C, size_x, size_y)
             # but the standalone validation (which read the transformed.tiff
             # output) found ID blocks correctly assuming standard image
             # convention (rows=dim2, cols=dim3). The validation chambers are
@@ -313,8 +319,35 @@ class ASCT_cellasic(BasePipeline):
         else:
             img_logger.info("2.5 - target-line crop disabled, skipping", show_memory=True)
 
-        # 2.6 Remove original image (not used after background corr) to save mem
+        # 2.6 Species-specific preprocessing (conditional; after crop so operators work
+        # on the cropped region only, and fl_norm reflects the final processed FL)
+        species = getattr(self, "species", None)
+        if species:
+            img_logger.info(
+                f"2.6 - Applying species-specific preprocessing for: {species}",
+                show_memory=True,
+            )
+            species_config_path = getattr(self, "species_config_path", None)
+            species_cfg = self._load_species_config(species, species_config_path)
+            if species_cfg:
+                ip.apply_species_preprocessing(
+                    nframes=range(nFrames),
+                    nslices=0,
+                    bf_channel=reference_channel,
+                    fl_channel=pi_channel,
+                    species_config=species_cfg,
+                )
+                img_logger.info(
+                    "2.6 - Species-specific preprocessing completed", show_memory=True
+                )
+        else:
+            img_logger.info(
+                "2.6 - No species configured; skipping species-specific preprocessing"
+            )
+
+        # 2.7 Remove original image to save mem + build fl_norm for union mask
         ip.img_original = np.zeros((1, 1, 1, 1, 1))
+        ip.build_fl_norm(fl_channel=pi_channel, nframes=range(nFrames))
 
         # 3. Single-step instance segmentation + classification
         img_logger.info("3 - Running single-step instance segmentation and classification", show_memory=True, cuda=is_cuda)
@@ -355,8 +388,18 @@ class ASCT_cellasic(BasePipeline):
             stacked_labeled_masks,
             stack_order=("TSCXY", "TXY")
         )
+        fl_norm = ip.fl_norm  # capture before del — used by union mask below
 
         del ip
+
+        # 3.3 FL union mask — recover ghost cells visible in FL but missed by BF segmentation
+        n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm)
+        if n_ghosts > 0:
+            img_analyser.total_rois = int(img_analyser.labeled_mask.max())
+            img_logger.info(f"3.3 - FL union mask: {n_ghosts} ghost cell(s) added")
+        else:
+            img_logger.info("3.3 - FL union mask: no ghost cells detected")
+        del fl_norm
 
         detection_records = []
         for frame_idx, (frame_classes, frame_scores) in enumerate(
@@ -414,6 +457,16 @@ class ASCT_cellasic(BasePipeline):
         )
         fl_measurements["object_class"] = fl_measurements["object_class"].fillna("unknown")
         fl_measurements["detection_score"] = fl_measurements["detection_score"].fillna(0.0)
+
+        # Override ghost cells: FL-union-mask additions have no detection record and
+        # are definitionally piPOS dead cells — assign class before the unknown warning
+        if ghost_records:
+            ghost_df = pd.DataFrame(ghost_records, columns=["frame", "label"])
+            ghost_df["_ghost"] = True
+            fl_measurements = fl_measurements.merge(ghost_df, on=["frame", "label"], how="left")
+            fl_measurements.loc[fl_measurements["_ghost"].notna(), "object_class"] = "ghost"
+            fl_measurements = fl_measurements.drop(columns=["_ghost"])
+
         n_unknown = (fl_measurements["object_class"] == "unknown").sum()
         if n_unknown > 0:
             img_logger.warning(
@@ -452,13 +505,19 @@ class ASCT_cellasic(BasePipeline):
         img_logger.info(f"4 - Object counts per frame:\n{counts_per_frame.to_string()}")
         img_logger.info("4 - Measurements completed", show_memory=True)
 
+        # Ghost cells are definitionally piPOS — determine their indices before classifier
+        ghost_mask = fl_measurements["object_class"] == "ghost"
+
         # 4.5 PI classification (if enabled)
         if self.pi_classifier is not None:
             img_logger.info("4.5 - Running PI classification", show_memory=True)
-            predictions = self.pi_classifier.predict(
-                fl_measurements[self.pi_classifier.feature_names_in_]
-            )
-            fl_measurements["pi_class"] = predictions
+            non_ghost = ~ghost_mask
+            if non_ghost.any():
+                predictions = self.pi_classifier.predict(
+                    fl_measurements.loc[non_ghost, self.pi_classifier.feature_names_in_]
+                )
+                fl_measurements.loc[non_ghost, "pi_class"] = predictions
+            fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
 
             if (
                 self.tracking
@@ -486,6 +545,9 @@ class ASCT_cellasic(BasePipeline):
                 img_logger,
             )
         else:
+            if ghost_mask.any():
+                fl_measurements["pi_class"] = "piNEG"
+                fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
             d_summary = pd.DataFrame()
 
         # 5. Export data --------------------------------------------
@@ -562,7 +624,7 @@ class ASCT_cellasic(BasePipeline):
 
         return name
 
-    # ----- helpers (inherited verbatim from ASCT_scsegm conceptually; -----
+    # ----- helpers (inherited verbatim from ASCT_instSeg conceptually; -----
     # copied here to keep the pipeline file self-contained) -----
 
     def clear_background(

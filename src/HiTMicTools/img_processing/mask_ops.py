@@ -1,5 +1,7 @@
-from typing import Any, List, Union, Optional, Dict
+from typing import Any, List, Tuple, Union, Optional, Dict
 import numpy as np
+from skimage.filters import threshold_otsu
+from skimage.measure import label as skimage_label
 
 
 def map_predictions_to_labels(
@@ -110,3 +112,75 @@ def map_predictions_to_labels_by_frame(
         )
 
     return np.stack(mapped_frames, axis=0)
+
+
+def apply_fl_union_mask(
+    labeled_mask: np.ndarray,
+    fl_norm: np.ndarray,
+    min_area: int = 20,
+    fl_threshold: Optional[float] = None,
+    overlap_tol: float = 0.1,
+) -> Tuple[int, List[Tuple[int, int]]]:
+    """
+    Add FL-detected ghost cells into *labeled_mask* in-place.
+
+    Ghost cells are FL-positive connected components with negligible overlap with
+    the existing BF segmentation — cells that lost phase contrast after death but
+    retain PI fluorescence.  Their labels are appended starting from
+    ``max_existing_label + 1`` per frame.
+
+    Args:
+        labeled_mask: Shape (T, S, C, X, Y) int array, modified in-place.
+            Only the view [:, 0, 0, :, :] is used and written back.
+        fl_norm: Normalized FL stack, shape (T, S, X, Y) or (T, X, Y),
+            float32 in [0, 1].
+        min_area: Minimum pixel area for a FL component to be added.
+        fl_threshold: Fixed threshold in [0, 1].  If None, per-frame Otsu on
+            the full frame is used.
+        overlap_tol: Max fractional overlap of a FL component with existing
+            labels before it is rejected (not a ghost).  Default 0.1 (≤10 %).
+
+    Returns:
+        Tuple of (n_added, ghost_records) where n_added is the total count of
+        ghost cells added and ghost_records is a list of (frame_idx, label_id)
+        for each added ghost cell — used downstream to assign object_class and
+        pi_class by construction (bypassing the classifier).
+    """
+    # Working views: (T, X, Y)
+    fl_work = fl_norm[:, 0, :, :] if fl_norm.ndim == 4 else fl_norm
+    lm_work = labeled_mask[:, 0, 0, :, :]  # view — writes propagate to labeled_mask
+
+    n_added = 0
+    ghost_records: List[Tuple[int, int]] = []
+
+    for t in range(fl_work.shape[0]):
+        fl_frame = fl_work[t]
+        if fl_frame.max() == 0:
+            continue
+
+        if fl_threshold is not None:
+            thr = fl_threshold
+        else:
+            thr = threshold_otsu(fl_frame)
+
+        fl_labeled = skimage_label(fl_frame > thr, connectivity=2)
+        if fl_labeled.max() == 0:
+            continue
+
+        lm_frame = lm_work[t]
+        next_label = int(lm_frame.max()) + 1
+
+        for comp_id in range(1, int(fl_labeled.max()) + 1):
+            comp_mask = fl_labeled == comp_id
+            area = int(comp_mask.sum())
+            if area < min_area:
+                continue
+            overlap = int((lm_frame[comp_mask] > 0).sum())
+            if area > 0 and overlap / area > overlap_tol:
+                continue
+            lm_frame[comp_mask] = next_label
+            ghost_records.append((t, next_label))
+            next_label += 1
+            n_added += 1
+
+    return n_added, ghost_records

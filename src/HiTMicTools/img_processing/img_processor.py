@@ -1,5 +1,6 @@
 import numpy as np
 import inspect
+from pathlib import Path
 from typing import Union, List, Optional, Dict, Tuple
 from templatematchingpy import StackAligner, AlignmentConfig
 from basicpy import BaSiC
@@ -419,3 +420,122 @@ class ImagePreprocessor:
             )
 
         assert max_value <= size_limit, f"{name} exceeds image dimensions"
+
+    def apply_species_preprocessing(
+        self,
+        nframes: Union[int, range, List[int]],
+        nslices: Union[int, range, List[int]],
+        bf_channel: int,
+        fl_channel: Optional[int],
+        species_config: Dict,
+    ) -> None:
+        """
+        Apply species-specific preprocessing operators to the BF (and optionally FL) channel.
+
+        Operators are dispatched from *species_config*, which is typically loaded from
+        ``species_defaults.yaml`` or a user-supplied override file.  Each operator entry
+        must contain an ``enabled`` key; all other keys are forwarded as kwargs.
+
+        The BF channel is enhanced in-place.  When *fl_channel* is provided and
+        ``fl_normalization.enabled`` is true, the FL channel is normalised to [0, 1]
+        and the result is stored both in ``self.img`` and as ``self.fl_norm`` for later
+        use (e.g. union-mask construction in the segmentation step).
+
+        Args:
+            nframes: Frame indices to process.
+            nslices: Slice indices to process.
+            bf_channel: BF channel index inside the image stack.
+            fl_channel: FL channel index, or None when FL is unavailable.
+            species_config: Dict mapping operator names to parameter dicts.
+
+        Returns:
+            None  (modifies ``self.img`` in-place)
+        """
+        from .species_preprocessing import (
+            apply_hessian_tubularness,
+            apply_directional_tophat,
+            apply_anisotropic_diffusion,
+            apply_rl_deconvolution,
+            apply_phase_congruency,
+            normalize_fluorescence,
+        )
+
+        # Operator registry: name → callable
+        _bf_operators = {
+            "hessian_tubularness": apply_hessian_tubularness,
+            "directional_tophat": apply_directional_tophat,
+            "anisotropic_diffusion": apply_anisotropic_diffusion,
+            "rl_deconvolution": apply_rl_deconvolution,
+            "phase_congruency": apply_phase_congruency,
+        }
+
+        self.check_size_limit(nframes, self.frames_size, "nframes")
+        self.check_size_limit(nslices, self.slices_size, "nslices")
+
+        index_table = stack_indexer(nframes, nslices, [bf_channel])
+
+        for t, s, _c in index_table:
+            frame = self.img[t, s, bf_channel, :, :].astype(np.float32)
+
+            for op_name, op_fn in _bf_operators.items():
+                op_cfg = species_config.get(op_name, {})
+                if not op_cfg.get("enabled", False):
+                    continue
+                kwargs = {k: v for k, v in op_cfg.items() if k != "enabled"}
+                frame = op_fn(frame, **kwargs)
+
+            self.img[t, s, bf_channel, :, :] = frame
+
+        # FL channel normalisation
+        if fl_channel is not None:
+            fl_cfg = species_config.get("fl_normalization", {})
+            if fl_cfg.get("enabled", False):
+                fl_kwargs = {k: v for k, v in fl_cfg.items() if k != "enabled"}
+                fl_index_table = stack_indexer(nframes, nslices, [fl_channel])
+                fl_norm_stack = self.img[:, :, fl_channel, :, :].copy().astype(np.float32)
+                for t, s, _c in fl_index_table:
+                    norm = normalize_fluorescence(
+                        self.img[t, s, fl_channel, :, :], **fl_kwargs
+                    )
+                    self.img[t, s, fl_channel, :, :] = norm
+                    fl_norm_stack[t, s] = norm
+                # Expose as a convenience attribute for the union-mask step
+                self.fl_norm = fl_norm_stack
+
+    def build_fl_norm(
+        self,
+        fl_channel: int,
+        nframes: Union[int, range, List[int]],
+        p_low: float = 1.0,
+        p_high: float = 99.0,
+    ) -> np.ndarray:
+        """
+        Build and cache a percentile-normalized FL stack for union-mask construction.
+
+        Idempotent: if ``apply_species_preprocessing`` already populated ``self.fl_norm``,
+        this method returns it without recomputing.
+
+        Args:
+            fl_channel: FL channel index in the image stack.
+            nframes: Frame indices to normalize.
+            p_low: Lower percentile for clipping (default 1.0).
+            p_high: Upper percentile for clipping (default 99.0).
+
+        Returns:
+            np.ndarray: Normalized FL stack, shape (T, S, X, Y), float32 in [0, 1].
+        """
+        if hasattr(self, "fl_norm"):
+            return self.fl_norm
+
+        from .species_preprocessing import normalize_fluorescence
+
+        fl_norm_stack = self.img[:, :, fl_channel, :, :].copy().astype(np.float32)
+        index_table = stack_indexer(nframes, 0, [fl_channel])
+        for t, s, _c in index_table:
+            fl_norm_stack[t, s] = normalize_fluorescence(
+                self.img[t, s, fl_channel, :, :],
+                percentile_low=p_low,
+                percentile_high=p_high,
+            )
+        self.fl_norm = fl_norm_stack
+        return self.fl_norm

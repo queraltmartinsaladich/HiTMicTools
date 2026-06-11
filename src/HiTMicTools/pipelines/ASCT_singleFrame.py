@@ -17,7 +17,10 @@ from HiTMicTools.pipelines.base_pipeline import BasePipeline
 from HiTMicTools.img_processing.img_processor import ImagePreprocessor
 from HiTMicTools.img_processing.array_ops import convert_image
 from HiTMicTools.img_processing.img_ops import measure_background_intensity
-from HiTMicTools.img_processing.mask_ops import map_predictions_to_labels_by_frame
+from HiTMicTools.img_processing.mask_ops import (
+    map_predictions_to_labels_by_frame,
+    apply_fl_union_mask,
+)
 from HiTMicTools.utils import remove_file_extension
 from HiTMicTools.roianalysis import RoiAnalyser
 from HiTMicTools.data_analysis.analysis_tools import roi_skewness, roi_std_dev
@@ -42,7 +45,7 @@ from HiTMicTools.data_analysis.analysis_tools import roi_skewness, roi_std_dev
 from jetraw_tools.image_reader import ImageReader
 
 
-class ASCTImageProcessing(BasePipeline):
+class ASCT_singleFrame(BasePipeline):
     """
     Pipeline for automated single-cell analysis on SINGLE-FRAME images.
 
@@ -50,7 +53,7 @@ class ASCTImageProcessing(BasePipeline):
     segmentation, classification, and fluorescence analysis without
     temporal tracking overhead.
 
-    Architecture differences from ASCT_focusRestoration:
+    Architecture differences from ASCT_semSeg:
     - Native single-frame processing (no frame iteration overhead)
     - Simplified classification workflow (direct 2D processing)
     - Optional frame expansion for compatibility with shared utilities
@@ -112,39 +115,35 @@ class ASCTImageProcessing(BasePipeline):
         img = np.zeros((1, 1, 1, 1))  # Remove img to save memory
 
         # 2 Pre-process image --------------------------------------------
-        img_logger.info("2.1 - Preprocessing image", show_memory=True)
         img_logger.info(f"Preprocessed image shape: {ip.img.shape}")
+        # No frame alignment for single-frame images
 
-        # No alignment for single frames
+        # 2.1 Detect and fix well borders (both BF and FL channels)
         img_logger.info("2.1 - Detecting and fixing border wells")
-        ip.detect_fix_well(nchannels=0, nslices=0, nframes=range(nFrames))  # Process all frames
-
-        img_logger.info(
-            f"Reference channel intensity before background removal:\n{self.check_px_values(ip, reference_channel, round=3)}"
+        ip.detect_fix_well(
+            nchannels=[reference_channel, pi_channel], nslices=0, nframes=range(nFrames)
         )
 
-        # Process all frames for background correction (required for BaSiC with T>=2)
+        # 2.2 Background removal (all frames; T=2 required for BaSiC compatibility)
+        img_logger.info(
+            f"2.2 - Background removal | BF mean before: {self.check_px_values(ip, reference_channel, round=3)}"
+        )
         self.clear_background(
             ip,
             channel=reference_channel,
-            nFrames=range(nFrames),  # Process all frames (T=2 for BaSiC compatibility)
+            nFrames=range(nFrames),
             method=method,
             pixel_size=pixel_size,
         )
-        img_logger.info('Background cleared in reference channel')
-
         self.clear_background(
-            ip,
-            channel=pi_channel,
-            nFrames=range(nFrames),  # Process all frames (T=2 required by BaSiC)
-            method=method
+            ip, channel=pi_channel, nFrames=range(nFrames), method=method
         )
-        img_logger.info('Background cleared in PI channel')
+        img_logger.info("2.2 - Background removal completed", show_memory=True)
 
-        # 2.2 Focus restoration (conditional)
-        if getattr(self, 'focus_correction', True):  # Default to True for backward compatibility
+        # 2.3 Focus restoration (conditional)
+        if getattr(self, 'focus_correction', True):
             img_logger.info(
-                "2.2 - Restoring focus in the reference channel", show_memory=True
+                "2.3 - Restoring focus in the reference channel", show_memory=True
             )
             img_logger.info(
                 f"Reference channel intensity before focus restoration:\n{self.check_px_values(ip, reference_channel, round=3)}"
@@ -158,7 +157,7 @@ class ASCTImageProcessing(BasePipeline):
                     buffer_dim=-1,
                     sw_batch_size=1,
                 )
-            img_logger.info("2.2 - Restoring focus in the PI channel", show_memory=True)
+            img_logger.info("2.3 - Restoring focus in the PI channel", show_memory=True)
             img_logger.info(
                 f"PI channel intensity before focus restoration:\n{self.check_px_values(ip, pi_channel, round=3)}"
             )
@@ -178,10 +177,36 @@ class ASCTImageProcessing(BasePipeline):
                 f"PI channel intensity after focus restoration:\n{self.check_px_values(ip, pi_channel, round=3)}"
             )
         else:
-            img_logger.info("2.2 - Focus correction disabled, skipping focus restoration", show_memory=True)
+            img_logger.info("2.3 - Focus correction disabled, skipping focus restoration", show_memory=True)
 
-        # 2.4 Remove original image (not used after background corr) to save mem
+        # 2.4 Species-specific preprocessing (conditional; after focus restoration)
+        species = getattr(self, "species", None)
+        if species:
+            img_logger.info(
+                f"2.4 - Applying species-specific preprocessing for: {species}",
+                show_memory=True,
+            )
+            species_config_path = getattr(self, "species_config_path", None)
+            species_cfg = self._load_species_config(species, species_config_path)
+            if species_cfg:
+                ip.apply_species_preprocessing(
+                    nframes=range(nFrames),
+                    nslices=0,
+                    bf_channel=reference_channel,
+                    fl_channel=pi_channel,
+                    species_config=species_cfg,
+                )
+                img_logger.info(
+                    "2.4 - Species-specific preprocessing completed", show_memory=True
+                )
+        else:
+            img_logger.info(
+                "2.4 - No species configured; skipping species-specific preprocessing"
+            )
+
+        # 2.5 Remove original image to save mem + build fl_norm for union mask
         ip.img_original = np.zeros((1, 1, 1, 1, 1))
+        ip.build_fl_norm(fl_channel=pi_channel, nframes=range(nFrames))
 
         # 3.1 Segment Image --------------------------------------------
         img_logger.info("3.1 - Image segmentation", show_memory=True, cuda=is_cuda)
@@ -190,6 +215,7 @@ class ASCTImageProcessing(BasePipeline):
         # 3.2 Get ROIs
         img_logger.info("3.2 - Extracting ROIs", show_memory=True)
         img_analyser = RoiAnalyser(ip.img, prob_map, stack_order=("TSCXY", "TCXY"))
+        fl_norm = ip.fl_norm  # capture before del — used by union mask below
 
         # Remove image-processor to release space
         del ip
@@ -198,8 +224,17 @@ class ASCTImageProcessing(BasePipeline):
         img_analyser.get_labels()
         img_logger.info(f"{img_analyser.total_rois} objects found in segmentation")
 
-        # 3.3 Classify ROIs
-        img_logger.info("3.3 - Classifying ROIs", show_memory=True, cuda=is_cuda)
+        # 3.3 FL union mask — recover ghost cells visible in FL but missed by BF segmentation
+        n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm)
+        if n_ghosts > 0:
+            img_analyser.total_rois = int(img_analyser.labeled_mask.max())
+            img_logger.info(f"3.3 - FL union mask: {n_ghosts} ghost cell(s) added")
+        else:
+            img_logger.info("3.3 - FL union mask: no ghost cells detected")
+        del fl_norm
+
+        # 3.4 Classify ROIs
+        img_logger.info("3.4 - Classifying ROIs", show_memory=True, cuda=is_cuda)
         object_classes, labels = self._classify_rois_single_frame(
             img_analyser, device, img_logger
         )
@@ -210,17 +245,31 @@ class ASCTImageProcessing(BasePipeline):
             img_analyser, object_classes, pi_channel, img_logger
         )
 
+        # Override ghost cells: added by FL union mask, definitionally piPOS
+        if ghost_records:
+            ghost_df = pd.DataFrame(ghost_records, columns=["frame", "label"])
+            ghost_df["_ghost"] = True
+            fl_measurements = fl_measurements.merge(ghost_df, on=["frame", "label"], how="left")
+            fl_measurements.loc[fl_measurements["_ghost"].notna(), "object_class"] = "ghost"
+            fl_measurements = fl_measurements.drop(columns=["_ghost"])
+
         counts_per_frame = fl_measurements["frame"].value_counts().sort_index()
         img_logger.info(f"4 - Object counts per frame:\n{counts_per_frame.to_string()}")
         img_logger.info("4 - Measurements completed", show_memory=True)
 
-        # 4.1 PI classification
+        # Ghost cells are definitionally piPOS — determine their indices before classifier
+        ghost_mask = fl_measurements["object_class"] == "ghost"
+
+        # 4.5 PI classification (if enabled)
         if self.pi_classifier is not None:
             img_logger.info("4.4 - Running PI classification", show_memory=True)
-            predictions = self.pi_classifier.predict(
-                fl_measurements[self.pi_classifier.feature_names_in_]
-            )
-            fl_measurements["pi_class"] = predictions
+            non_ghost = ~ghost_mask
+            if non_ghost.any():
+                predictions = self.pi_classifier.predict(
+                    fl_measurements.loc[non_ghost, self.pi_classifier.feature_names_in_]
+                )
+                fl_measurements.loc[non_ghost, "pi_class"] = predictions
+            fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
             fl_measurements["file"] = name
 
             # Generate summary data using the dedicated method
@@ -230,6 +279,9 @@ class ASCTImageProcessing(BasePipeline):
                 img_logger,
             )
         else:
+            if ghost_mask.any():
+                fl_measurements["pi_class"] = "piNEG"
+                fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
             d_summary = pd.DataFrame()
 
         # 5. Export data --------------------------------------------
@@ -247,6 +299,7 @@ class ASCTImageProcessing(BasePipeline):
                 "noise": 2,
                 "off-focus": 3,
                 "joint-cell": 4,
+                "ghost": 5,
             }
             label_slice = img_analyser.get(
                 "labels", index=(slice(None), 0, 0), to_numpy=True

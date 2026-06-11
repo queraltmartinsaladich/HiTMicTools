@@ -1,0 +1,158 @@
+# HiTMicTools – Species-specific preprocessing defaults
+#
+# Each species block activates/deactivates operators and sets their parameters.
+# All parameters can be overridden by supplying a custom YAML via
+# `species_config_path` in the pipeline_setup config section.
+#
+# Operator reference (see species_preprocessing.py for full docs):
+#   hessian_tubularness   – Frangi vesselness; bridges hollow-centre artefact
+#   directional_tophat    – Multi-orientation white top-hat; enhances filaments
+#   anisotropic_diffusion – Perona-Malik diffusion; smooths halos, preserves edges
+#   rl_deconvolution      – Richardson-Lucy; reverses out-of-focus coccal blur
+#   phase_congruency      – Log-Gabor phase congruency; low-contrast edge detection
+#   fl_normalization      – Percentile-clip FL channel to [0, 1]
+#
+# Species identifiers (case-insensitive in pipeline dispatch):
+#   ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera | s_aureus
+
+species:
+
+  # ── Escherichia coli ──────────────────────────────────────────────────────
+  # Key challenges: refractive hollow-centre artefact, high-density swarming,
+  # stress-induced filamentation (§11.1)
+  ecoli:
+    hessian_tubularness:
+      enabled: true
+      sigmas: [1, 2, 3]
+      black_ridges: true
+      blend_weight: 0.3
+    directional_tophat:
+      enabled: false
+    anisotropic_diffusion:
+      enabled: false
+    rl_deconvolution:
+      enabled: false
+    phase_congruency:
+      enabled: false
+    fl_normalization:
+      enabled: true
+      percentile_low: 1.0
+      percentile_high: 99.0
+
+  # ── Pseudomonas aeruginosa ────────────────────────────────────────────────
+  # Key challenges: OMV puncta, EPS matrix, elongated filaments/spaghetti forms,
+  # pre-lytic punctate condensation (§11.2)
+  p_aeruginosa:
+    hessian_tubularness:
+      enabled: true
+      sigmas: [1, 2]
+      black_ridges: true
+      blend_weight: 0.3
+    directional_tophat:
+      enabled: true
+      scales: [3, 7, 11]
+      n_orientations: 8
+      blend_weight: 0.5
+    anisotropic_diffusion:
+      enabled: false
+    rl_deconvolution:
+      enabled: false
+    phase_congruency:
+      enabled: false
+    fl_normalization:
+      enabled: true
+      percentile_low: 1.0
+      percentile_high: 99.0
+
+  # ── Mycobacterium tuberculosis ────────────────────────────────────────────
+  # Key challenges: serpentine cording, mycolic-acid diffraction halos,
+  # ghost cells (optical ghosting), coccoid persistence forms (§11.4)
+  m_tuberculosis:
+    hessian_tubularness:
+      enabled: true
+      sigmas: [1, 2, 3]
+      black_ridges: true
+      blend_weight: 0.3
+    directional_tophat:
+      enabled: false
+    anisotropic_diffusion:
+      enabled: true
+      n_iter: 20
+      kappa: 30.0
+      gamma: 0.1
+    rl_deconvolution:
+      enabled: false
+    phase_congruency:
+      enabled: false
+    fl_normalization:
+      enabled: true
+      percentile_low: 1.0
+      percentile_high: 99.0
+
+  # ── Mycobacterium abscessus ───────────────────────────────────────────────
+  # Key challenges: hydrophobic 3-D aggregation, rough/smooth phenotypic disparity,
+  # plate-grid segmentation failures, beaded polymorphism (§11.3)
+  m_abscessus:
+    hessian_tubularness:
+      enabled: true
+      sigmas: [1, 2, 3]
+      black_ridges: true
+      blend_weight: 0.3
+    directional_tophat:
+      enabled: false
+    anisotropic_diffusion:
+      enabled: false
+    rl_deconvolution:
+      enabled: false
+    phase_congruency:
+      enabled: false
+    fl_normalization:
+      enabled: true
+      percentile_low: 1.0
+      percentile_high: 99.0
+
+  # ── Mycobacterium chimaera ────────────────────────────────────────────────
+  # Key challenges: meniscus distortions, dense 3-D biofilm, low phase contrast
+  # of slow-growing cell walls (§11.5)
+  m_chimaera:
+    hessian_tubularness:
+      enabled: false
+    directional_tophat:
+      enabled: false
+    anisotropic_diffusion:
+      enabled: false
+    rl_deconvolution:
+      enabled: false
+    phase_congruency:
+      enabled: true
+      nscale: 4
+      norient: 6
+      min_wavelength: 3.0
+      mult: 2.1
+      sigma_onf: 0.55
+      blend_weight: 0.5
+    fl_normalization:
+      enabled: true
+      percentile_low: 1.0
+      percentile_high: 99.0
+
+  # ── Staphylococcus aureus ─────────────────────────────────────────────────
+  # Key challenges: 3-D grape-like clusters, sub-resolution edge diffraction,
+  # out-of-focus blur rings from multi-planar stacking (§11.6)
+  s_aureus:
+    hessian_tubularness:
+      enabled: false
+    directional_tophat:
+      enabled: false
+    anisotropic_diffusion:
+      enabled: false
+    rl_deconvolution:
+      enabled: true
+      psf_sigma: 1.0
+      n_iter: 30
+    phase_congruency:
+      enabled: false
+    fl_normalization:
+      enabled: true
+      percentile_low: 1.0
+      percentile_high: 99.0

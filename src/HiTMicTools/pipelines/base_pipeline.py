@@ -551,6 +551,65 @@ class BasePipeline(ABC):
             with zip_ref.open("config_tracker.yml") as config_file:
                 return yaml.safe_load(config_file)
 
+    def _load_species_config(
+        self,
+        species: str,
+        custom_config_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Load species-specific preprocessing parameters from a YAML config file.
+
+        Looks up the species entry in the bundled ``species_defaults.yaml`` unless a
+        custom path is provided via *custom_config_path*.  Species keys are
+        case-insensitive.
+
+        Args:
+            species: Species identifier, e.g. ``"ecoli"``, ``"s_aureus"``.
+            custom_config_path: Optional path to a user-supplied species YAML.
+                If *None* or the file does not exist, the bundled defaults are used.
+
+        Returns:
+            Dict with operator configurations for the given species, or an empty
+            dict if the species is not found.
+        """
+        bundled_path = str(
+            Path(__file__).resolve().parent.parent
+            / "img_processing"
+            / "species_defaults.yaml"
+        )
+
+        config_path = bundled_path
+        if custom_config_path and os.path.isfile(custom_config_path):
+            config_path = custom_config_path
+            self.main_logger.info(
+                f"Species preprocessing: using custom config from {custom_config_path}"
+            )
+        else:
+            self.main_logger.info(
+                f"Species preprocessing: using bundled defaults ({bundled_path})"
+            )
+
+        with open(config_path, "r") as fh:
+            all_species = yaml.safe_load(fh)
+
+        species_key = species.lower()
+        species_cfg = (all_species.get("species") or {}).get(species_key)
+
+        if species_cfg is None:
+            self.main_logger.warning(
+                f"No preprocessing config found for species '{species}'. "
+                "No species-specific operators will be applied."
+            )
+            return {}
+
+        self.main_logger.info(
+            f"Species preprocessing config loaded for '{species_key}': "
+            + ", ".join(
+                op for op, cfg in species_cfg.items() if isinstance(cfg, dict) and cfg.get("enabled")
+            )
+        )
+        return species_cfg
+
     def config_image_analysis(
         self,
         reference_channel: int,
@@ -586,6 +645,13 @@ class BasePipeline(ABC):
                     Defaults to "max-autotune".
                 - debug_provenance (bool, optional): If True, include local source
                     and interpreter paths in analysis logs. Defaults to False.
+                - species (str, optional): Species key for species-aware preprocessing.
+                    E.g. "ecoli", "s_aureus", "m_tuberculosis". When set, the bundled
+                    species_defaults.yaml is loaded and species-specific operators are
+                    applied during preprocessing.
+                - species_config_path (str, optional): Path to a custom species YAML
+                    that overrides the bundled defaults.
+                - pi_channel (int, optional): Fluorescence/PI channel index.
 
         Raises:
             ValueError: If required keys are missing or have invalid types
