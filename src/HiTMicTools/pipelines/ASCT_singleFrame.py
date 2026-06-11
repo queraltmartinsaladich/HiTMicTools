@@ -21,6 +21,9 @@ from HiTMicTools.img_processing.mask_ops import (
     map_predictions_to_labels_by_frame,
     apply_fl_union_mask,
 )
+from HiTMicTools.img_processing.morphology_corrections import (
+    apply_semSeg_morphology_corrections,
+)
 from HiTMicTools.utils import remove_file_extension
 from HiTMicTools.roianalysis import RoiAnalyser
 from HiTMicTools.data_analysis.analysis_tools import roi_skewness, roi_std_dev
@@ -253,6 +256,16 @@ class ASCT_singleFrame(BasePipeline):
             fl_measurements.loc[fl_measurements["_ghost"].notna(), "object_class"] = "ghost"
             fl_measurements = fl_measurements.drop(columns=["_ghost"])
 
+        # 4.4 Morphology-based label corrections (R1 only — single frame, no division detection)
+        img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
+        fl_measurements, morph_counts = apply_semSeg_morphology_corrections(
+            fl_measurements, img_analyser.labeled_mask,
+            enable_division_detection=False,
+        )
+        img_logger.info(
+            f"4.4 - Morphology corrections: {morph_counts['interior_to_clump']} interior→clump"
+        )
+
         counts_per_frame = fl_measurements["frame"].value_counts().sort_index()
         img_logger.info(f"4 - Object counts per frame:\n{counts_per_frame.to_string()}")
         img_logger.info("4 - Measurements completed", show_memory=True)
@@ -262,7 +275,7 @@ class ASCT_singleFrame(BasePipeline):
 
         # 4.5 PI classification (if enabled)
         if self.pi_classifier is not None:
-            img_logger.info("4.4 - Running PI classification", show_memory=True)
+            img_logger.info("4.5 - Running PI classification", show_memory=True)
             non_ghost = ~ghost_mask
             if non_ghost.any():
                 predictions = self.pi_classifier.predict(

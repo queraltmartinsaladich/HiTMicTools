@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 from skimage.morphology import skeletonize
 from scipy.ndimage import convolve as nd_convolve
+from scipy.spatial.distance import cdist
 
 
 # 3×3 kernel counting the 8-connected neighbours of each skeleton pixel
@@ -173,5 +174,119 @@ def apply_instSeg_morphology_corrections(
         "spaghetti_to_debris": int(r1.sum()),
         "lysed_to_debris": int((r2 & ~r1).sum()),
         "merged_to_clump": int((r3 & ~r1 & ~r2).sum()),
+    }
+    return fl, counts
+
+
+def apply_semSeg_morphology_corrections(
+    fl_measurements: pd.DataFrame,
+    labeled_mask: np.ndarray,
+    area_clump_frac: float = 2.5,
+    clump_solidity_max: float = 0.78,
+    division_dist_frac: float = 1.0,
+    division_angle_deg: float = 40.0,
+    enable_division_detection: bool = True,
+) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """Rule-based morphology corrections for semSeg pipeline (mycobacteria).
+
+    Two rules targeting the specific failure modes of UNet + watershed on
+    dense mycobacterial colonies:
+
+    R1 — interior clump artifact → clump
+         single-cell with area > area_clump_frac × median AND at least one of:
+           • skeleton branch points ≥ 1 (complex internal shape)
+           • solidity < clump_solidity_max (irregular boundary from merged cells)
+         Catches interior cells of dense clumps where phase-contrast boundaries
+         are invisible and the watershed merges multiple cells into one ROI.
+
+    R2 — proximate aligned pair → joint-cell  (division detection)
+         Pairs of single-cell ROIs in the same frame where:
+           • centroid distance < division_dist_frac × median_major_axis_length
+           • |orientation difference| < division_angle_deg  (undirected angle)
+         Both ROIs are flagged as joint-cell.  Skipped when
+         enable_division_detection=False (e.g., singleFrame pipeline).
+
+    Adds aspect_ratio and skeleton_branch_points columns to the returned
+    DataFrame for downstream morphology feature extraction.
+
+    Args:
+        fl_measurements: DataFrame with object_class, area, major_axis_length,
+            minor_axis_length, solidity, orientation, centroid-0, centroid-1,
+            frame, label columns.
+        labeled_mask: (T, S, C, X, Y) integer mask array from img_analyser.
+        area_clump_frac: Area threshold multiplier for R1.  Default 2.5.
+        clump_solidity_max: Solidity ceiling for R1.  Default 0.78.
+        division_dist_frac: Centroid distance threshold (× median major axis)
+            for R2.  Default 1.0.
+        division_angle_deg: Maximum orientation difference in degrees for R2.
+            Default 40.0.
+        enable_division_detection: Set False to skip R2 (singleFrame pipeline).
+
+    Returns:
+        Tuple of (updated DataFrame, correction counts dict).
+        Counts keys: interior_to_clump, division_pairs_to_joint.
+    """
+    fl = _add_aspect_ratio(fl_measurements)
+    fl = _add_skeleton_features(fl, labeled_mask)
+
+    sc_mask = fl["object_class"] == "single-cell"
+    sc_rows = fl.loc[sc_mask]
+    median_area = sc_rows["area"].median() if len(sc_rows) > 0 else fl["area"].median()
+    median_major = (
+        sc_rows["major_axis_length"].median()
+        if len(sc_rows) > 0
+        else fl["major_axis_length"].median()
+    )
+
+    # R1: interior artifact → clump
+    r1 = (
+        sc_mask
+        & (fl["area"] > area_clump_frac * median_area)
+        & (
+            (fl["skeleton_branch_points"] >= 1)
+            | (fl["solidity"] < clump_solidity_max)
+        )
+    )
+    fl.loc[r1, "object_class"] = "clump"
+
+    # R2: proximate aligned pair → joint-cell (division detection)
+    joint_indices: set = set()
+
+    if enable_division_detection and fl["frame"].nunique() > 1:
+        dist_threshold = division_dist_frac * median_major
+        angle_threshold = np.deg2rad(division_angle_deg)
+
+        cx_col = "centroid-0" if "centroid-0" in fl.columns else None
+        cy_col = "centroid-1" if "centroid-1" in fl.columns else None
+
+        if cx_col is not None:
+            for _, frame_group in fl.groupby("frame"):
+                sc_frame = frame_group[frame_group["object_class"] == "single-cell"]
+                if len(sc_frame) < 2:
+                    continue
+
+                centroids = sc_frame[[cx_col, cy_col]].values
+                orientations = sc_frame["orientation"].values
+                indices = sc_frame.index.tolist()
+
+                dists = cdist(centroids, centroids)
+
+                for i in range(len(sc_frame)):
+                    for j in range(i + 1, len(sc_frame)):
+                        if dists[i, j] >= dist_threshold:
+                            continue
+                        # Undirected angle between major axes in [-π/2, π/2]
+                        diff = abs(orientations[i] - orientations[j])
+                        angle_diff = min(diff, np.pi - diff)
+                        if angle_diff < angle_threshold:
+                            joint_indices.add(indices[i])
+                            joint_indices.add(indices[j])
+
+    if joint_indices:
+        fl.loc[fl.index.isin(joint_indices), "object_class"] = "joint-cell"
+
+    counts: Dict[str, int] = {
+        "interior_to_clump": int(r1.sum()),
+        "division_pairs_to_joint": len(joint_indices),
     }
     return fl, counts
