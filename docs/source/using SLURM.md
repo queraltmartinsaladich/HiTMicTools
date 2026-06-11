@@ -520,7 +520,7 @@ input_data:
   export_aligned_image: false
 
 pipeline_setup:
-  name: "ASCT_focusrestore"
+  name: "ASCT_semSeg"
   parallel_processing: false        # Use SLURM arrays instead
   num_workers: 1                    # Single worker per SLURM task
   reference_channel: 0

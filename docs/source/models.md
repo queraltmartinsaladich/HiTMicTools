@@ -27,8 +27,8 @@ Model collections are ZIP bundles that contain all required models and configura
 
 | Collection | Pipeline | Tracking | Description |
 |------------|----------|----------|-------------|
-| `model_collection_tracking_20250529.zip` | ASCT_focusrestore | Yes | Full pipeline with tracking |
-| `model_collection_scsegm_20251106.zip` | ASCT_scsegm | Optional | RT-DETR instance segmentation |
+| `model_collection_tracking_20250529.zip` | ASCT_semSeg | Yes | Full pipeline with tracking |
+| `model_collection_scsegm_20251106.zip` | ASCT_instSeg | Optional | RT-DETR instance segmentation |
 | `model_collection_oof_20251014.zip` | Various | No | With out-of-focus detection |
 
 ### Using Model Collections
@@ -239,7 +239,7 @@ The pipeline loads models using `load_model_fromdict()` which supports:
 
 **RT-DETR (Real-Time Detection Transformer)**
 - Architecture: Transformer-based object detection
-- Used in ASCT_scsegm pipeline
+- Used in ASCT_instSeg pipeline
 - Input: Single-channel brightfield
 - Output: Bounding boxes + masks
 - Typical size: ~100-200 MB

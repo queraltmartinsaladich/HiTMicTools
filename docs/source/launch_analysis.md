@@ -87,7 +87,7 @@ input_data:
   export_aligned_image: false               # Export aligned/corrected images
 
 pipeline_setup:
-  name: "ASCT_focusrestore"                 # Pipeline type
+  name: "ASCT_semSeg"                 # Pipeline type
   parallel_processing: true                 # Enable parallel processing
   num_workers: 3                            # Number of parallel workers
   reference_channel: 0                      # Brightfield channel (usually 0)
@@ -135,8 +135,8 @@ models:
 
 ### Available Pipelines
 
-- **ASCT_focusrestore**: Focus restoration + segmentation + classification (most common)
-- **ASCT_scsegm**: Single-cell instance segmentation with RT-DETR
+- **ASCT_semSeg**: Focus restoration + segmentation + classification (most common)
+- **ASCT_instSeg**: Single-cell instance segmentation with RT-DETR
 - **ASCT_zaslavier**: Specialized pipeline for Zaslavier lab workflow
 
 ### Processing Single Files

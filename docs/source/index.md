@@ -8,7 +8,7 @@ HiTMicTools streamlines the analysis of high-throughput microscopy data through:
 
 - **Automated Image Processing**: Focus restoration, alignment, and background correction for brightfield and fluorescence channels
 - **Deep Learning Models**: Integrated neural network models for cell segmentation, classification, and quality control
-- **Flexible Pipelines**: Multiple analysis workflows (ASCT_focusrestore, ASCT_scsegm, ASCT_zaslavier, etc.)
+- **Flexible Pipelines**: Multiple analysis workflows (ASCT_semSeg, ASCT_instSeg, ASCT_zaslavier, etc.)
 - **Cell Tracking**: Optional btrack-based trajectory reconstruction for lineage analysis
 - **Scalable Processing**: Built-in support for parallel processing and SLURM cluster deployment
 - **Resource Management**: Smart GPU/CPU memory management for multi-process environments

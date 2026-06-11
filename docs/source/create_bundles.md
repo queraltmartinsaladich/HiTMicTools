@@ -460,7 +460,7 @@ This metadata:
 Include only the models your pipeline needs:
 
 ```yaml
-# Minimal bundle for ASCT_focusrestore
+# Minimal bundle for ASCT_semSeg
 bf_focus:
   model_path: "./models/bf_focus/model.pth"
   model_metadata: "./models/bf_focus/config.json"
@@ -552,7 +552,7 @@ cat > test_pipeline.yml << EOF
 models:
   model_collection: "./test_bundle.zip"
 pipeline_setup:
-  name: "ASCT_focusrestore"
+  name: "ASCT_semSeg"
   # ... other settings
 EOF
 

@@ -187,7 +187,7 @@ input_data:
   export_aligned_image: false
 
 pipeline_setup:
-  name: "ASCT_focusrestore"
+  name: "ASCT_semSeg"
   parallel_processing: true
   num_workers: 3
   reference_channel: 0
@@ -205,7 +205,7 @@ models:
 
 ```yaml
 pipeline_setup:
-  name: "ASCT_focusrestore"
+  name: "ASCT_semSeg"
   tracking: true
   align_frames: true  # Required for tracking
 

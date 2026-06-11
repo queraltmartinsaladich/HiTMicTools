@@ -199,7 +199,7 @@ input_data:
   export_aligned_image: false
 
 pipeline_setup:
-  name: "ASCT_focusrestore"
+  name: "ASCT_semSeg"
   parallel_processing: true
   num_workers: 2                    # Reduce for tracking (more memory intensive)
   reference_channel: 0
@@ -260,7 +260,7 @@ hitmictools run --config config/tracking_config.yml
 
 The CLI will indicate tracking is enabled:
 ```
-Loading pipeline: ASCT_focusrestore
+Loading pipeline: ASCT_semSeg
 Tracking enabled: True
 Loading tracking configuration from model bundle
 Tracking config: CellTrackingConfig (max_search_radius=15.0)

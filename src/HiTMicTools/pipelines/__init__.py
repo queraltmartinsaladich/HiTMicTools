@@ -10,9 +10,9 @@ via their `required_models` class attribute.
 from typing import Dict, Type, Set
 
 from HiTMicTools.pipelines.base_pipeline import BasePipeline
-from HiTMicTools.pipelines.ASCT_focusrestore import ASCT_focusRestoration
-from HiTMicTools.pipelines.ASCT_ImageProcessing import ASCTImageProcessing
-from HiTMicTools.pipelines.ASCT_scsegm import ASCT_scsegm
+from HiTMicTools.pipelines.ASCT_semSeg import ASCT_semSeg
+from HiTMicTools.pipelines.ASCT_singleFrame import ASCT_singleFrame
+from HiTMicTools.pipelines.ASCT_instSeg import ASCT_instSeg
 from HiTMicTools.pipelines.ASCT_cellasic import ASCT_cellasic
 from HiTMicTools.pipelines.ASCT_zaslavier import ASCT_zaslavier
 from HiTMicTools.pipelines.oof_detection import OOF_detection
@@ -48,9 +48,9 @@ class PipelineMetadata:
 # Pipeline registry mapping pipeline names to their classes
 # Model requirements are automatically discovered from each class
 PIPELINE_REGISTRY: Dict[str, PipelineMetadata] = {
-    "ASCT_focusrestore": PipelineMetadata(ASCT_focusRestoration),
-    "ASCT_ImageProcessing": PipelineMetadata(ASCTImageProcessing),
-    "ASCT_scsegm": PipelineMetadata(ASCT_scsegm),
+    "ASCT_semSeg": PipelineMetadata(ASCT_semSeg),
+    "ASCT_singleFrame": PipelineMetadata(ASCT_singleFrame),
+    "ASCT_instSeg": PipelineMetadata(ASCT_instSeg),
     "ASCT_cellasic": PipelineMetadata(ASCT_cellasic),
     "ASCT_zaslavier": PipelineMetadata(ASCT_zaslavier),
     "oof_detection": PipelineMetadata(OOF_detection),
@@ -70,7 +70,7 @@ def get_pipeline(name: str) -> PipelineMetadata:
         ValueError: If pipeline name is not found in registry
 
     Example:
-        >>> metadata = get_pipeline("ASCT_scsegm")
+        >>> metadata = get_pipeline("ASCT_instSeg")
         >>> pipeline_cls = metadata.cls
         >>> required = metadata.required_models
     """
@@ -100,9 +100,9 @@ def list_pipelines() -> Dict[str, Set[str]]:
 
 __all__ = [
     "BasePipeline",
-    "ASCT_focusRestoration",
-    "ASCTImageProcessing",
-    "ASCT_scsegm",
+    "ASCT_semSeg",
+    "ASCT_singleFrame",
+    "ASCT_instSeg",
     "ASCT_cellasic",
     "ASCT_zaslavier",
     "OOF_detection",
