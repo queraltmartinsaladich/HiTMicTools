@@ -20,6 +20,9 @@ from HiTMicTools.img_processing.mask_ops import (
     map_predictions_to_labels_by_frame,
     apply_fl_union_mask,
 )
+from HiTMicTools.img_processing.morphology_corrections import (
+    apply_instSeg_morphology_corrections,
+)
 from HiTMicTools.utils import get_timestamps, remove_file_extension
 from HiTMicTools.roianalysis import RoiAnalyser
 from HiTMicTools.data_analysis.analysis_tools import roi_skewness, roi_std_dev
@@ -351,16 +354,28 @@ class ASCT_instSeg(BasePipeline):
             fl_measurements["background"], axis=0
         )
 
-        # 4.4 Object tracking (if enabled)
+        # 4.4 Morphology-based label corrections
+        img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
+        fl_measurements, morph_counts = apply_instSeg_morphology_corrections(
+            fl_measurements, img_analyser.labeled_mask
+        )
+        img_logger.info(
+            f"4.4 - Morphology corrections: "
+            f"{morph_counts['spaghetti_to_debris']} spaghetti→debris, "
+            f"{morph_counts['lysed_to_debris']} lysed→debris, "
+            f"{morph_counts['merged_to_clump']} single-cell→clump"
+        )
+
+        # 4.5 Object tracking (if enabled)
         if self.tracking and self.cell_tracker is not None:
-            img_logger.info("4.4 - Running object tracking")
+            img_logger.info("4.5 - Running object tracking")
             track_features = fl_prop[5:10]
             self.cell_tracker.set_features(track_features)
             try:
                 fl_measurements = self.cell_tracker.track_objects(
                     fl_measurements, volume_bounds=(size_x, size_y), logger=img_logger
                 )
-                img_logger.info("4.4 - Object tracking completed successfully")
+                img_logger.info("4.5 - Object tracking completed successfully")
             except Exception as e:
                 img_logger.error(f"Object tracking failed: {e}")
                 # Continue without tracking
@@ -372,9 +387,9 @@ class ASCT_instSeg(BasePipeline):
         # Ghost cells are definitionally piPOS — determine their indices before classifier
         ghost_mask = fl_measurements["object_class"] == "ghost"
 
-        # 4.5 PI classification (if enabled)
+        # 4.6 PI classification (if enabled)
         if self.pi_classifier is not None:
-            img_logger.info("4.5 - Running PI classification", show_memory=True)
+            img_logger.info("4.6 - Running PI classification", show_memory=True)
             non_ghost = ~ghost_mask
             if non_ghost.any():
                 predictions = self.pi_classifier.predict(
@@ -383,13 +398,13 @@ class ASCT_instSeg(BasePipeline):
                 fl_measurements.loc[non_ghost, "pi_class"] = predictions
             fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
 
-            # 4.6 piPOS lock-in (if tracker supports it)
+            # 4.7 piPOS lock-in (if tracker supports it)
             if (
                 self.tracking
                 and self.cell_tracker is not None
                 and hasattr(self.cell_tracker, "apply_pipos_lockin")
             ):
-                img_logger.info("4.6 - Applying piPOS lock-in")
+                img_logger.info("4.7 - Applying piPOS lock-in")
                 fl_measurements = self.cell_tracker.apply_pipos_lockin(
                     fl_measurements, logger=img_logger
                 )
