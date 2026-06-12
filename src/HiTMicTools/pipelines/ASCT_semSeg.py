@@ -395,7 +395,8 @@ class ASCT_semSeg(BasePipeline):
             self.cell_tracker.set_features(track_features)
             try:
                 fl_measurements = self.cell_tracker.track_objects(
-                    fl_measurements, volume_bounds=(size_x, size_y), logger=img_logger
+                    fl_measurements, volume_bounds=(size_x, size_y),
+                    logger=img_logger, pixel_size=pixel_size,
                 )
                 img_logger.info("4.5 - Object tracking completed successfully")
             except Exception as e:

@@ -49,22 +49,27 @@ class HungarianTracker:
         max_distance: float = 25.0,
         gap_bridge_frames: int = 2,
         feature_weights: Optional[Dict[str, float]] = None,
+        max_distance_um: Optional[float] = None,
     ):
         """
         Args:
-            max_distance: Maximum total linking cost (pixels). Pairs whose
-                combined centroid + appearance cost exceeds this are left
-                unlinked.  For centroid-only mode the threshold is pure
-                Euclidean distance; with appearance features it is the
-                weighted sum.
+            max_distance: Maximum total linking cost in *pixels*. Used when
+                ``max_distance_um`` is not set or pixel_size is unavailable.
             gap_bridge_frames: Consecutive missed frames tolerated before a
                 track is retired.  0 = no bridging (v1 behaviour).
             feature_weights: Mapping of feature column name → weight.  Each
                 non-zero entry adds a normalised relative-difference penalty
                 (scaled to pixel units by max_distance) to the cost matrix.
                 ``None`` uses DEFAULT_WEIGHTS.  Pass ``{}`` for centroid-only.
+            max_distance_um: Maximum linking distance in *microns*.  When set
+                and ``pixel_size`` is passed to ``track_objects``, this takes
+                priority over ``max_distance`` and is converted to pixels at
+                run time.  Preferred over the pixel-based threshold because it
+                is objective/camera-independent (e.g. 2.0 µm suits most
+                rod-shaped bacteria at 1–5 min frame intervals).
         """
         self.max_distance = max_distance
+        self.max_distance_um = max_distance_um
         self.gap_bridge_frames = gap_bridge_frames
         self.feature_weights: Dict[str, float] = (
             dict(self.DEFAULT_WEIGHTS) if feature_weights is None else dict(feature_weights)
@@ -89,6 +94,7 @@ class HungarianTracker:
         measurements_df: pd.DataFrame,
         volume_bounds: Optional[Tuple[int, int]] = None,
         logger: Optional[logging.Logger] = None,
+        pixel_size: Optional[float] = None,
     ) -> pd.DataFrame:
         """Assign persistent track IDs across frames.
 
@@ -98,11 +104,20 @@ class HungarianTracker:
                 are present are used for appearance cost.
             volume_bounds: Ignored (API compatibility with CellTracker).
             logger: Optional logger instance.
+            pixel_size: Physical pixel size in µm/px (from image metadata).
+                When provided alongside ``max_distance_um``, the µm threshold
+                is converted to pixels and used instead of ``max_distance``.
 
         Returns:
             Input DataFrame with ``trackid`` column added (int32; -1 for
             unlinked detections).
         """
+        # Resolve effective max_distance (pixels) for this image
+        if self.max_distance_um is not None and pixel_size is not None and pixel_size > 0:
+            effective_max_dist = self.max_distance_um / pixel_size
+        else:
+            effective_max_dist = self.max_distance
+
         df = measurements_df.copy()
         frames = sorted(df["frame"].unique())
 
@@ -205,7 +220,7 @@ class HungarianTracker:
                 ])
                 curr_feats = df.loc[curr_indices, active_feats].values.astype(float)
                 cost = self._build_cost_matrix(
-                    euclid, prev_feats, curr_feats, feat_weights_arr, self.max_distance
+                    euclid, prev_feats, curr_feats, feat_weights_arr, effective_max_dist
                 )
             else:
                 cost = euclid
@@ -214,7 +229,7 @@ class HungarianTracker:
 
             linked_curr: set = set()
             for r, c in zip(row_ind, col_ind):
-                if cost[r, c] <= self.max_distance:
+                if cost[r, c] <= effective_max_dist:
                     tid = eligible_tids[r]
                     curr_idx = curr_indices[c]
                     c0, c1 = (
@@ -278,9 +293,15 @@ class HungarianTracker:
                 if active_feats
                 else "centroid-only (feature_weights empty)"
             )
+            dist_config = (
+                f"max_distance={self.max_distance_um} µm → {effective_max_dist:.1f} px "
+                f"(pixel_size={pixel_size} µm/px)"
+                if self.max_distance_um is not None and pixel_size is not None
+                else f"max_distance={effective_max_dist:.1f} px (pixel-space)"
+            )
             logger.info(
                 f"Hungarian tracking summary:\n"
-                f"  Config: max_distance={self.max_distance}, "
+                f"  Config: {dist_config}, "
                 f"gap_bridge_frames={self.gap_bridge_frames}, {feat_info}\n"
                 f"  Frames: {n_frames}, Detections: {n_objects}\n"
                 f"  Tracks: {n_tracks} total, {full_length_tracks} full-length "

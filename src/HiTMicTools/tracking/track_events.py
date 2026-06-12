@@ -143,6 +143,9 @@ def detect_lysis_events(fl_measurements: pd.DataFrame) -> Tuple[pd.DataFrame, Di
     fl = fl_measurements.copy()
     fl["lysis_event_frame"] = np.nan
 
+    if "lyse" not in fl.get("object_class", pd.Series(dtype=str)).values:
+        return fl, {"n_lysis_events": 0}
+
     tracked = fl[fl["trackid"] != -1]
     if tracked.empty:
         return fl, {"n_lysis_events": 0}
@@ -191,6 +194,9 @@ def detect_filamentation_events(
     """
     fl = fl_measurements.copy()
     fl["filamentation_onset_frame"] = np.nan
+
+    if "long" not in fl.get("object_class", pd.Series(dtype=str)).values:
+        return fl, {"n_filamentation_events": 0}
 
     tracked = fl[fl["trackid"] != -1]
     if tracked.empty:
@@ -259,6 +265,9 @@ def compute_fl_trajectory_features(
     fl["fl_track_slope"] = np.nan
     fl["fl_pipos_frame"] = np.nan
     fl["rel_mean_intensity_smooth"] = np.nan
+
+    if "rel_mean_intensity" not in fl.columns:
+        return fl
 
     tracked = fl[fl["trackid"] != -1]
     if tracked.empty:

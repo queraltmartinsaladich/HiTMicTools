@@ -31,7 +31,7 @@ shaped detections (wrong size/shape for both rules) remain as debris.
         purely geometric from the labeled mask.
 """
 import warnings
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -106,7 +106,7 @@ def _add_skeleton_features(
 
 def apply_instSeg_morphology_corrections(
     fl_measurements: pd.DataFrame,
-    labeled_mask: np.ndarray,
+    labeled_mask: Optional[np.ndarray] = None,
     spaghetti_ar: float = 8.0,
     spaghetti_solidity: float = 0.72,
     lysis_solidity: float = 0.45,
@@ -138,7 +138,13 @@ def apply_instSeg_morphology_corrections(
         Counts keys: filamented_to_long, lysed_to_lyse, merged_to_clump.
     """
     fl = _add_aspect_ratio(fl_measurements)
-    fl = _add_skeleton_features(fl, labeled_mask)
+
+    if "skeleton_branch_points" not in fl.columns:
+        raise ValueError(
+            "skeleton_branch_points column is missing from fl_measurements. "
+            "Run feature extraction (get_roi_measurements with roi_skeleton_branch_points "
+            "in extra_properties) before calling apply_instSeg_morphology_corrections."
+        )
 
     # Reference area from single-cell labels only — clumps inflate the median
     sc_areas = fl.loc[fl["object_class"] == "single-cell", "area"]
@@ -190,7 +196,7 @@ def apply_instSeg_morphology_corrections(
 
 def apply_semSeg_morphology_corrections(
     fl_measurements: pd.DataFrame,
-    labeled_mask: np.ndarray,
+    labeled_mask: Optional[np.ndarray] = None,
     area_clump_frac: float = 2.5,
     clump_solidity_max: float = 0.78,
     division_dist_frac: float = 1.0,
@@ -237,7 +243,13 @@ def apply_semSeg_morphology_corrections(
         Counts keys: interior_to_clump, division_pairs_to_joint.
     """
     fl = _add_aspect_ratio(fl_measurements)
-    fl = _add_skeleton_features(fl, labeled_mask)
+
+    if "skeleton_branch_points" not in fl.columns:
+        raise ValueError(
+            "skeleton_branch_points column is missing from fl_measurements. "
+            "Run feature extraction (get_roi_measurements with roi_skeleton_branch_points "
+            "in extra_properties) before calling apply_semSeg_morphology_corrections."
+        )
 
     sc_mask = fl["object_class"] == "single-cell"
     sc_rows = fl.loc[sc_mask]
