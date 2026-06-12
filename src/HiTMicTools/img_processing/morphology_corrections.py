@@ -8,20 +8,21 @@ Currently implemented for the instSeg / cellasic vocabulary
     (single-cell, clump, debris).
 
 Three rules applied after the primary segmentation model assigns labels.
-The model's own ``debris`` class (image artifacts, non-biological objects)
-is left untouched; the rules add two biologically distinct new classes:
+The model's ``debris`` class is a catch-all; R1/R2 can rescue biologically
+meaningful cells that were mis-labelled as debris.  Only truly artifact-
+shaped detections (wrong size/shape for both rules) remain as debris.
 
   R1 — filamentation → long
-        single-cell with extreme elongation (high AR) AND irregular boundary
-        (low solidity).  Normal stressed/elongated rods stay single-cell;
-        spaghetti forms (bent/tangled, growth without separation) become
-        ``long``.  These cells are biologically meaningful and must pass
-        through the PI classifier normally — they may or may not be dying.
+        single-cell or debris with extreme elongation (high AR) AND
+        irregular boundary (low solidity).  Normal stressed/elongated rods
+        stay single-cell; spaghetti forms (bent/tangled, growth without
+        separation) become ``long``.  Biologically meaningful — may or may
+        not be dying; passes through the PI classifier normally.
 
   R2 — lysis / explosion → lyse
-        single-cell or clump with very low solidity AND area above the
-        noise floor.  Ruptured cells have highly irregular masks.  PI signal
-        may have diffused post-lysis so they also go through the classifier.
+        single-cell, clump, or debris with very low solidity AND area above
+        the noise floor.  Ruptured cells have highly irregular masks.  PI
+        signal may have diffused post-lysis so they go through the classifier.
 
   R3 — merged detection → clump
         single-cell whose mask skeleton has branch points (dumbbell shape
@@ -29,6 +30,7 @@ is left untouched; the rules add two biologically distinct new classes:
         the expected single-cell size.  Requires no intensity image —
         purely geometric from the labeled mask.
 """
+import warnings
 from typing import Dict, Tuple
 
 import numpy as np
@@ -145,20 +147,18 @@ def apply_instSeg_morphology_corrections(
     # R1: filamentation → long
     # High AR catches extreme elongation; low solidity ensures the shape is
     # bent/tangled rather than a straight stressed rod (which stays single-cell).
-    # "long" cells are biologically meaningful — growth without separation.
-    # They may or may not die and must go through the PI classifier normally.
+    # Also fires on model-classified debris that matches spaghetti geometry.
     r1 = (
-        (fl["object_class"] == "single-cell")
+        fl["object_class"].isin(["single-cell", "debris"])
         & (fl["aspect_ratio"] > spaghetti_ar)
         & (fl["solidity"] < spaghetti_solidity)
     )
 
     # R2: lysis / explosion → lyse
     # Very low solidity (fragmented boundary) + non-trivial area (not just noise).
-    # "lyse" cells have ruptured membranes; PI signal may have diffused so they
-    # still go through the PI classifier rather than being hard-coded piPOS.
+    # Also fires on model-classified debris that matches explosion geometry.
     r2 = (
-        fl["object_class"].isin(["single-cell", "clump"])
+        fl["object_class"].isin(["single-cell", "clump", "debris"])
         & (fl["solidity"] < lysis_solidity)
         & (fl["area"] > lysis_area_frac * median_area)
     )
@@ -262,6 +262,14 @@ def apply_semSeg_morphology_corrections(
     # R2: proximate aligned pair → joint-cell (division detection)
     joint_indices: set = set()
 
+    if enable_division_detection and fl["frame"].nunique() == 1:
+        warnings.warn(
+            "apply_semSeg_morphology_corrections: division detection (R2) requires "
+            "more than one frame but only 1 frame found — R2 skipped. "
+            "If this is unexpected, check that your data has multiple time points.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if enable_division_detection and fl["frame"].nunique() > 1:
         dist_threshold = division_dist_frac * median_major
         angle_threshold = np.deg2rad(division_angle_deg)

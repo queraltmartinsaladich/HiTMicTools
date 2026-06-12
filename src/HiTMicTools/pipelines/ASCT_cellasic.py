@@ -29,6 +29,10 @@ Config additions vs ASCT_instSeg:
     crop_to_target_line: bool (default True)
         Toggle the crop step. Set False to debug the rest of the
         pipeline without changing image dimensions.
+    raise_on_crop_failure: bool (default True)
+        If True, raise NoIDBlockDetected when the ID-block is not found
+        (hard failure). Set False to log a warning and continue with the
+        uncropped image — useful for debugging on non-standard FOVs.
     cellasic_per_frame_crop: bool (default True)
         Detect the ID block on every frame and track stage drift with a
         fixed-size crop box. Set False to use the legacy single-frame
@@ -283,42 +287,50 @@ class ASCT_cellasic(BasePipeline):
                         threshold=ncc_thr,
                     )
             except NoIDBlockDetected as e:
-                img_logger.error(f"2.5 - target-line crop failed: {e}")
-                raise
-
-            # Sanity check: the detected ID block centre should sit near
-            # the middle of the input height (line 5 is the middle line of
-            # the chamber). If the axes are swapped, we'd see the centre
-            # at an extreme position.
-            cx_det, cy_det = crop_info["centre_xy"]
-            H_in = stack_tcxy.shape[2]
-            if not (0.2 * H_in < cy_det < 0.8 * H_in):
-                raise RuntimeError(
-                    f"2.5 - ID block centre Y={cy_det:.0f} is outside the expected "
-                    f"middle 60% of image height ({H_in}). Axis order may be wrong, "
-                    f"or this FOV may not show line 5. Detections: {crop_info['detections']}"
+                if getattr(self, "raise_on_crop_failure", True):
+                    img_logger.error(f"2.5 - target-line crop failed: {e}")
+                    raise
+                img_logger.warning(
+                    f"2.5 - ID-block not detected ({e}). "
+                    "Continuing with uncropped image (raise_on_crop_failure=False). "
+                    "Segmentation model may be out-of-distribution on full FOV."
                 )
+                crop_info = None
 
-            img_logger.info(
-                f"  detections={crop_info['n_detections']}  "
-                f"angle={crop_info['angle_deg']:+.3f}deg  "
-                f"crop Y=[{crop_info['crop_y0']},{crop_info['crop_y1']}] "
-                f"({crop_info['crop_height']}px)  mode={crop_info['crop_mode']}"
-            )
-            if "max_abs_drift_px" in crop_info:
+            if crop_info is not None:
+                # Sanity check: the detected ID block centre should sit near
+                # the middle of the input height (line 5 is the middle line of
+                # the chamber). If the axes are swapped, we'd see the centre
+                # at an extreme position.
+                cx_det, cy_det = crop_info["centre_xy"]
+                H_in = stack_tcxy.shape[2]
+                if not (0.2 * H_in < cy_det < 0.8 * H_in):
+                    raise RuntimeError(
+                        f"2.5 - ID block centre Y={cy_det:.0f} is outside the expected "
+                        f"middle 60% of image height ({H_in}). Axis order may be wrong, "
+                        f"or this FOV may not show line 5. Detections: {crop_info['detections']}"
+                    )
+
                 img_logger.info(
-                    f"  per-frame crop: tracked {crop_info['n_frames_detected']}/"
-                    f"{crop_info['n_frames']} frames "
-                    f"({crop_info['n_frames_interpolated']} interpolated), "
-                    f"max drift {crop_info['max_abs_drift_px']:.0f}px  "
-                    f"x-range={tuple(round(v) for v in crop_info['drift_x_range_px'])} "
-                    f"y-range={tuple(round(v) for v in crop_info['drift_y_range_px'])}"
+                    f"  detections={crop_info['n_detections']}  "
+                    f"angle={crop_info['angle_deg']:+.3f}deg  "
+                    f"crop Y=[{crop_info['crop_y0']},{crop_info['crop_y1']}] "
+                    f"({crop_info['crop_height']}px)  mode={crop_info['crop_mode']}"
                 )
+                if "max_abs_drift_px" in crop_info:
+                    img_logger.info(
+                        f"  per-frame crop: tracked {crop_info['n_frames_detected']}/"
+                        f"{crop_info['n_frames']} frames "
+                        f"({crop_info['n_frames_interpolated']} interpolated), "
+                        f"max drift {crop_info['max_abs_drift_px']:.0f}px  "
+                        f"x-range={tuple(round(v) for v in crop_info['drift_x_range_px'])} "
+                        f"y-range={tuple(round(v) for v in crop_info['drift_y_range_px'])}"
+                    )
 
-            # Re-insert slice axis: (T, C, X, Y) -> (T, 1, C, X, Y)
-            ip.img = cropped_tcxy[:, np.newaxis, :, :, :]
-            size_x, size_y = ip.img.shape[-2], ip.img.shape[-1]
-            img_logger.info(f"  image shape after crop: {ip.img.shape}", show_memory=True)
+                # Re-insert slice axis: (T, C, X, Y) -> (T, 1, C, X, Y)
+                ip.img = cropped_tcxy[:, np.newaxis, :, :, :]
+                size_x, size_y = ip.img.shape[-2], ip.img.shape[-1]
+                img_logger.info(f"  image shape after crop: {ip.img.shape}", show_memory=True)
         else:
             img_logger.info("2.5 - target-line crop disabled, skipping", show_memory=True)
 

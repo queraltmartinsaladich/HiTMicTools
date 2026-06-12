@@ -391,15 +391,22 @@ class ASCT_semSeg(BasePipeline):
         d_summary.to_csv(export_path + "_summary.csv")
 
         if export_labeled_mask:
-            # Create mapping for object classes
-            class_to_id = {
-                "single-cell": 0,
-                "clump": 1,
-                "noise": 2,
-                "off-focus": 3,
-                "joint-cell": 4,
-                "ghost": 5,
-            }
+            # Build class_to_id dynamically: known classes keep a stable pixel-value
+            # ordering; any unexpected class gets a new ID appended at the end so
+            # exports don't silently drop labels.
+            _known_classes = ["single-cell", "clump", "noise", "off-focus", "joint-cell", "ghost"]
+            class_to_id = {c: i for i, c in enumerate(_known_classes)}
+            _seen = set(fl_measurements["object_class"].dropna().unique())
+            _unexpected = sorted(_seen - set(_known_classes))
+            if _unexpected:
+                img_logger.warning(
+                    f"Unexpected object_class values found during export: {_unexpected}. "
+                    "These will be assigned new pixel IDs beyond the standard range."
+                )
+                next_id = max(class_to_id.values()) + 1
+                for cls in _unexpected:
+                    class_to_id[cls] = next_id
+                    next_id += 1
             label_slice = img_analyser.get(
                 "labels", index=(slice(None), 0, 0), to_numpy=True
             )

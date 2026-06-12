@@ -91,6 +91,12 @@ class ASCT_singleFrame(BasePipeline):
         movie_name = remove_file_extension(name)
         img_logger = self.setup_logger(self.output_path, movie_name)
         img_logger.info(f"Start single-frame analysis for {movie_name}")
+        if getattr(self, "tracking", False):
+            img_logger.warning(
+                "tracking=True is set but ASCT_singleFrame does not support object "
+                "tracking (single-frame analysis has no temporal axis). "
+                "Tracking will be skipped."
+            )
         reference_channel = self.reference_channel
         pi_channel = self.pi_channel
         method = self.method
@@ -305,15 +311,22 @@ class ASCT_singleFrame(BasePipeline):
         d_summary.to_csv(export_path + "_summary.csv")
 
         if export_labeled_mask:
-            # Create mapping for object classes
-            class_to_id = {
-                "single-cell": 0,
-                "clump": 1,
-                "noise": 2,
-                "off-focus": 3,
-                "joint-cell": 4,
-                "ghost": 5,
-            }
+            # Build class_to_id dynamically: known classes keep a stable pixel-value
+            # ordering; any unexpected class gets a new ID appended at the end so
+            # exports don't silently drop labels.
+            _known_classes = ["single-cell", "clump", "noise", "off-focus", "joint-cell", "ghost"]
+            class_to_id = {c: i for i, c in enumerate(_known_classes)}
+            _seen = set(fl_measurements["object_class"].dropna().unique())
+            _unexpected = sorted(_seen - set(_known_classes))
+            if _unexpected:
+                img_logger.warning(
+                    f"Unexpected object_class values found during export: {_unexpected}. "
+                    "These will be assigned new pixel IDs beyond the standard range."
+                )
+                next_id = max(class_to_id.values()) + 1
+                for cls in _unexpected:
+                    class_to_id[cls] = next_id
+                    next_id += 1
             label_slice = img_analyser.get(
                 "labels", index=(slice(None), 0, 0), to_numpy=True
             )
@@ -563,7 +576,7 @@ class ASCT_singleFrame(BasePipeline):
             size_x = metadata.images[0].pixels.size_x
             size_y = metadata.images[0].pixels.size_y
             nChannels = metadata.images[0].pixels.size_c
-            metadata.images[0].pixels.size_t
+            nFrames = metadata.images[0].pixels.size_t
 
         # Normalize dimensions
         if img.ndim == 2:
@@ -675,7 +688,11 @@ class ASCT_singleFrame(BasePipeline):
             logger.warning(f"Could not extract pixel_size from TIFF metadata: {e}")
 
         # Default fallback
-        logger.info("Using default pixel_size: 1.0 µm")
+        logger.warning(
+            "Could not read pixel_size from TIFF metadata. "
+            "Falling back to 1.0 µm — calibration-dependent results will be incorrect. "
+            "Set pixel_size explicitly in the pipeline config to suppress this warning."
+        )
         return 1.0
 
     def _segment_single_frame(
