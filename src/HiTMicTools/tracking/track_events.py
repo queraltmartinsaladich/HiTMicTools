@@ -7,7 +7,8 @@ are final before any of these functions run.
 Public API
 ----------
 refine_tracks              — short-track filter, class smoothing, area plausibility
-detect_division_events     — temporal parent→daughter split detection
+detect_division_events     — temporal parent→daughter split detection (requires ended tracks)
+reconcile_lineage          — retrospective area-halving detector for missed divisions
 detect_lysis_events        — single-cell→lyse transition per track
 detect_filamentation_events — persistent long-class runs per track
 compute_fl_trajectory_features — per-track FL intensity stats + smoothing
@@ -245,6 +246,149 @@ def detect_division_events(
                     break
 
     return fl, {"n_division_events": n_events}
+
+
+# ---------------------------------------------------------------------------
+# Retrospective lineage reconciler
+# ---------------------------------------------------------------------------
+
+def reconcile_lineage(
+    fl_measurements: pd.DataFrame,
+    area_drop_frac: float = 0.40,
+    area_conservation_tol: float = 0.30,
+    centroid_dist_frac: float = 2.0,
+    valid_classes: tuple = ("single-cell", "long"),
+) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """Fill in division events missed by detect_division_events.
+
+    The Hungarian tracker typically assigns one daughter to the parent track,
+    leaving ``ended`` empty so ``detect_division_events`` never fires.  This
+    function recovers those events by looking for:
+
+      - A *continued* track X (present at both frame t and t+1) whose area
+        drops by at least ``area_drop_frac`` between the two frames.
+      - A *new* track Y (first appearing at t+1) whose centroid at t+1 is
+        within ``centroid_dist_frac × major_axis_length`` of X's centroid at t,
+        and whose area satisfies:
+        ``|area(X,t+1) + area(Y,t+1) − area(X,t)| / area(X,t) ≤ area_conservation_tol``
+
+    When a pair is found, sets ``division_parent_trackid[Y] = X.trackid``.
+    Entries already set by ``detect_division_events`` are not overwritten.
+    Each continued track X and each new track Y can be matched at most once
+    per frame; ties are broken by centroid distance (closest first).
+
+    Must be called after ``detect_division_events`` so that
+    ``division_parent_trackid`` already exists.
+
+    Args:
+        fl_measurements: DataFrame with trackid, frame, area, centroid_0,
+            centroid_1, major_axis_length, object_class columns.
+        area_drop_frac: Minimum fractional area loss by the continued track
+            at the division frame.  Default 0.40.
+        area_conservation_tol: Maximum fractional deviation of
+            ``area(X,t+1) + area(Y,t+1)`` from ``area(X,t)``.  Default 0.30.
+        centroid_dist_frac: Distance threshold as a multiple of the parent's
+            ``major_axis_length``.  Default 2.0.
+        valid_classes: ``object_class`` values that are eligible to divide.
+
+    Returns:
+        Tuple of (updated DataFrame, counts dict with key n_reconciled_divisions).
+    """
+    fl = fl_measurements.copy()
+    if "division_parent_trackid" not in fl.columns:
+        fl["division_parent_trackid"] = np.nan
+
+    ghost_mask = fl.get("object_class", pd.Series(dtype=str)) == "ghost"
+    tracked = fl[(fl["trackid"] != -1) & ~ghost_mask].copy()
+
+    required = {"area", "centroid_0", "centroid_1", "major_axis_length"}
+    if tracked.empty or not required.issubset(tracked.columns):
+        return fl, {"n_reconciled_divisions": 0}
+
+    frames = sorted(tracked["frame"].unique())
+    n_reconciled = 0
+
+    for i, frame_t in enumerate(frames[:-1]):
+        frame_t1 = frames[i + 1]
+
+        rows_t  = tracked[tracked["frame"] == frame_t]
+        rows_t1 = tracked[tracked["frame"] == frame_t1]
+
+        ids_t  = set(rows_t["trackid"])
+        ids_t1 = set(rows_t1["trackid"])
+
+        continued_ids = ids_t & ids_t1
+        new_ids       = ids_t1 - ids_t
+
+        if not new_ids or not continued_ids:
+            continue
+
+        cont_t  = rows_t[rows_t["trackid"].isin(continued_ids)].set_index("trackid")
+        cont_t1 = rows_t1[rows_t1["trackid"].isin(continued_ids)].set_index("trackid")
+
+        # Continued tracks that halved in area and had a dividable class at t
+        halved_ids = []
+        for xid in continued_ids:
+            if xid not in cont_t.index or xid not in cont_t1.index:
+                continue
+            if cont_t.at[xid, "object_class"] not in valid_classes:
+                continue
+            a_t  = float(cont_t.at[xid, "area"])
+            a_t1 = float(cont_t1.at[xid, "area"])
+            if a_t < 1 or np.isnan(a_t) or np.isnan(a_t1):
+                continue
+            if a_t1 / a_t < (1.0 - area_drop_frac):
+                halved_ids.append(xid)
+
+        if not halved_ids:
+            continue
+
+        new_rows = rows_t1[rows_t1["trackid"].isin(new_ids)]
+
+        # Build candidate (dist, new_df_idx, new_trackid, parent_trackid) list
+        candidate_pairs = []
+        for _, new_row in new_rows.iterrows():
+            if pd.notna(fl.at[new_row.name, "division_parent_trackid"]):
+                continue  # already assigned by detect_division_events
+            y_class = str(new_row.get("object_class", ""))
+            if y_class not in valid_classes:
+                continue
+            y_cx   = float(new_row["centroid_0"])
+            y_cy   = float(new_row["centroid_1"])
+            y_area = float(new_row["area"])
+            y_tid  = int(new_row["trackid"])
+
+            for xid in halved_ids:
+                x_cx    = float(cont_t.at[xid, "centroid_0"])
+                x_cy    = float(cont_t.at[xid, "centroid_1"])
+                x_major = max(float(cont_t.at[xid, "major_axis_length"]), 1.0)
+                a_t     = float(cont_t.at[xid, "area"])
+                a_t1    = float(cont_t1.at[xid, "area"])
+
+                dist = np.sqrt((y_cx - x_cx) ** 2 + (y_cy - x_cy) ** 2)
+                if dist > centroid_dist_frac * x_major:
+                    continue
+
+                conservation_err = abs((a_t1 + y_area) - a_t) / max(a_t, 1.0)
+                if conservation_err > area_conservation_tol:
+                    continue
+
+                candidate_pairs.append((dist, new_row.name, y_tid, xid))
+
+        # Assign greedily: closest first, no parent or daughter double-claimed
+        candidate_pairs.sort(key=lambda x: x[0])
+        claimed_parents: set = set()
+        assigned_new: set    = set()
+
+        for dist, y_idx, y_tid, xid in candidate_pairs:
+            if xid in claimed_parents or y_tid in assigned_new:
+                continue
+            fl.loc[fl["trackid"] == y_tid, "division_parent_trackid"] = float(xid)
+            claimed_parents.add(xid)
+            assigned_new.add(y_tid)
+            n_reconciled += 1
+
+    return fl, {"n_reconciled_divisions": n_reconciled}
 
 
 # ---------------------------------------------------------------------------

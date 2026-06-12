@@ -26,6 +26,7 @@ from HiTMicTools.img_processing.morphology_corrections import (
 from HiTMicTools.tracking.track_events import (
     refine_tracks,
     detect_division_events,
+    reconcile_lineage,
     detect_lysis_events,
     detect_filamentation_events,
     compute_fl_trajectory_features,
@@ -466,12 +467,14 @@ class ASCT_semSeg(BasePipeline):
                 f"{refine_counts['class_flicker_rows']} class flicker rows"
             )
             fl_measurements, div_counts = detect_division_events(fl_measurements)
+            fl_measurements, rec_counts = reconcile_lineage(fl_measurements)
             fl_measurements, lys_counts = detect_lysis_events(fl_measurements)
             fl_measurements, fil_counts = detect_filamentation_events(fl_measurements)
             fl_measurements = compute_fl_trajectory_features(fl_measurements)
             img_logger.info(
                 f"4.7 - Track events: "
-                f"{div_counts['n_division_events']} divisions, "
+                f"{div_counts['n_division_events']} divisions (original), "
+                f"{rec_counts['n_reconciled_divisions']} divisions (reconciled), "
                 f"{lys_counts['n_lysis_events']} lysis events, "
                 f"{fil_counts['n_filamentation_events']} filamentation events"
             )
