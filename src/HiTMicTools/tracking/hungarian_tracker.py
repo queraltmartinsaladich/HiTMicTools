@@ -135,16 +135,14 @@ class HungarianTracker:
             if active_feats else None
         )
 
+        if active_feats:
+            _all_feat_vals = df[active_feats].values.astype(float)
+            _idx_to_pos = {idx: pos for pos, idx in enumerate(df.index)}
+
         def _feat_vals(idx: int) -> Optional[np.ndarray]:
             if not active_feats:
                 return None
-            return np.array(
-                [
-                    float(df.at[idx, f]) if not pd.isna(df.at[idx, f]) else np.nan
-                    for f in active_feats
-                ],
-                dtype=float,
-            )
+            return _all_feat_vals[_idx_to_pos[idx]]
 
         track_ids = pd.Series(np.int32(-1), index=df.index)
         next_track_id = 0

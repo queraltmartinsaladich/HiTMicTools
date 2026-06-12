@@ -55,7 +55,8 @@ def detect_division_events(
     fl = fl_measurements.copy()
     fl["division_parent_trackid"] = np.nan
 
-    tracked = fl[fl["trackid"] != -1].copy()
+    ghost_mask = fl.get("object_class", pd.Series(dtype=str)) == "ghost"
+    tracked = fl[(fl["trackid"] != -1) & ~ghost_mask].copy()
     if tracked.empty or "trackid" not in fl.columns:
         return fl, {"n_division_events": 0}
 
@@ -146,7 +147,7 @@ def detect_lysis_events(fl_measurements: pd.DataFrame) -> Tuple[pd.DataFrame, Di
     if "lyse" not in fl.get("object_class", pd.Series(dtype=str)).values:
         return fl, {"n_lysis_events": 0}
 
-    tracked = fl[fl["trackid"] != -1]
+    tracked = fl[(fl["trackid"] != -1) & (fl["object_class"] != "ghost")]
     if tracked.empty:
         return fl, {"n_lysis_events": 0}
 
@@ -198,7 +199,7 @@ def detect_filamentation_events(
     if "long" not in fl.get("object_class", pd.Series(dtype=str)).values:
         return fl, {"n_filamentation_events": 0}
 
-    tracked = fl[fl["trackid"] != -1]
+    tracked = fl[(fl["trackid"] != -1) & (fl["object_class"] != "ghost")]
     if tracked.empty:
         return fl, {"n_filamentation_events": 0}
 

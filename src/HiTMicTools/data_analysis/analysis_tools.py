@@ -438,33 +438,33 @@ def dilated_measures(regionmask, intensity, structure=np.ones((5, 5)), iteration
 def roi_skeleton_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:
     """Skeleton-derived morphology and intensity features.
 
-    Computes the medial-axis skeleton once and derives four metrics:
+    Computes the medial-axis skeleton *once* and derives five metrics,
+    replacing the separate ``roi_skeleton_branch_points`` callable so that
+    only a single skeletonize call is made per ROI.
 
-      [0] skeleton_length     — pixel count of the skeleton (true cell length
-                                proxy for curved / bent cells; major_axis_length
-                                underestimates spaghetti forms)
-      [1] mean_cell_width     — area / skeleton_length  (diameter proxy,
-                                scales with cell volume for rod-shaped cells)
-      [2] skeleton_curvature  — R² of a linear regression on skeleton pixel
-                                coordinates (1.0 = perfectly straight rod,
-                                lower values indicate bending / branching)
+      [0] skeleton_length      — pixel count of the skeleton (true cell length
+                                 proxy for curved / bent cells)
+      [1] mean_cell_width      — area / skeleton_length  (diameter proxy)
+      [2] skeleton_curvature   — R² of a linear regression on skeleton pixel
+                                 coordinates (1.0 = perfectly straight rod)
       [3] intensity_continuity — std of first-differences of FL intensity
-                                along the ordered skeleton (0 = smooth,
-                                high = discontinuous / patchy signal; dead
-                                cells with heterogeneous PI uptake score high)
+                                 along the ordered skeleton (0 = smooth,
+                                 high = discontinuous / patchy)
+      [4] skeleton_branch_points — pixels with ≥ 3 skeleton neighbours
+                                 (0 = single rod, ≥ 1 = branched / clump)
 
-    Returns a 4-element float array.  In regionprops_table the columns are
-    named roi_skeleton_features-0 … roi_skeleton_features-3; rename them
-    to skeleton_length, mean_cell_width, skeleton_curvature,
-    intensity_continuity after extraction.
+    Returns a 5-element float array.  In regionprops_table the columns are
+    named roi_skeleton_features-0 … roi_skeleton_features-4; rename to
+    skeleton_length, mean_cell_width, skeleton_curvature,
+    intensity_continuity, skeleton_branch_points after extraction.
     """
     if regionmask.sum() < 5:
-        return np.zeros(4, dtype=float)
+        return np.zeros(5, dtype=float)
 
     skel = skeletonize(regionmask)
     skel_px = int(skel.sum())
     if skel_px == 0:
-        return np.zeros(4, dtype=float)
+        return np.zeros(5, dtype=float)
 
     skeleton_length = float(skel_px)
     mean_cell_width = float(regionmask.sum()) / skeleton_length
@@ -472,8 +472,16 @@ def roi_skeleton_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.n
     skel_rows, skel_cols = np.where(skel)
     n_skel = len(skel_rows)
 
+    # --- skeleton_branch_points: pixels with ≥ 3 skeleton neighbours ---
+    neighbors = _nd_convolve(
+        skel.astype(np.int32), _BRANCH_KERNEL, mode="constant", cval=0
+    )
+    branch_points = float((skel & (neighbors >= 3)).sum())
+
     if n_skel < 3:
-        return np.array([skeleton_length, mean_cell_width, 1.0, 0.0], dtype=float)
+        return np.array(
+            [skeleton_length, mean_cell_width, 1.0, 0.0, branch_points], dtype=float
+        )
 
     # --- skeleton_curvature: R² of linear fit on skeleton pixels ---
     try:
@@ -501,7 +509,8 @@ def roi_skeleton_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.n
     intensity_continuity = float(np.std(np.diff(skel_intensities))) if n_skel >= 2 else 0.0
 
     return np.array(
-        [skeleton_length, mean_cell_width, skeleton_curvature, intensity_continuity],
+        [skeleton_length, mean_cell_width, skeleton_curvature, intensity_continuity,
+         branch_points],
         dtype=float,
     )
 
