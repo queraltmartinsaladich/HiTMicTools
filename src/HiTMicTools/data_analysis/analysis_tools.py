@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import linregress, skew
 from skimage.feature import graycomatrix, graycoprops
+from skimage.filters import frangi
 from skimage.measure import find_contours, perimeter
 from skimage.morphology import convex_hull_image, skeletonize
 
@@ -427,6 +428,212 @@ def dilated_measures(regionmask, intensity, structure=np.ones((5, 5)), iteration
     pixel_area = np.sum(dilated_regionmask > 0)
 
     return (std_px, mean_px, min_px, max_px, pixel_area)
+
+
+# ---------------------------------------------------------------------------
+# Skeleton-based features  (one skeletonize call per ROI for all four)
+# ---------------------------------------------------------------------------
+
+def roi_skeleton_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:
+    """Skeleton-derived morphology and intensity features.
+
+    Computes the medial-axis skeleton once and derives four metrics:
+
+      [0] skeleton_length     — pixel count of the skeleton (true cell length
+                                proxy for curved / bent cells; major_axis_length
+                                underestimates spaghetti forms)
+      [1] mean_cell_width     — area / skeleton_length  (diameter proxy,
+                                scales with cell volume for rod-shaped cells)
+      [2] skeleton_curvature  — R² of a linear regression on skeleton pixel
+                                coordinates (1.0 = perfectly straight rod,
+                                lower values indicate bending / branching)
+      [3] intensity_continuity — std of first-differences of FL intensity
+                                along the ordered skeleton (0 = smooth,
+                                high = discontinuous / patchy signal; dead
+                                cells with heterogeneous PI uptake score high)
+
+    Returns a 4-element float array.  In regionprops_table the columns are
+    named roi_skeleton_features-0 … roi_skeleton_features-3; rename them
+    to skeleton_length, mean_cell_width, skeleton_curvature,
+    intensity_continuity after extraction.
+    """
+    if regionmask.sum() < 5:
+        return np.zeros(4, dtype=float)
+
+    skel = skeletonize(regionmask)
+    skel_px = int(skel.sum())
+    if skel_px == 0:
+        return np.zeros(4, dtype=float)
+
+    skeleton_length = float(skel_px)
+    mean_cell_width = float(regionmask.sum()) / skeleton_length
+
+    skel_rows, skel_cols = np.where(skel)
+    n_skel = len(skel_rows)
+
+    if n_skel < 3:
+        return np.array([skeleton_length, mean_cell_width, 1.0, 0.0], dtype=float)
+
+    # --- skeleton_curvature: R² of linear fit on skeleton pixels ---
+    try:
+        result = linregress(skel_cols.astype(float), skel_rows.astype(float))
+        skeleton_curvature = float(result.rvalue ** 2)
+    except Exception:
+        skeleton_curvature = 0.0
+
+    # --- intensity_continuity: sort skeleton along major axis, measure gradient ---
+    cy = float(skel_rows.mean())
+    cx = float(skel_cols.mean())
+    coords = np.column_stack([skel_rows - cy, skel_cols - cx]).astype(float)
+    try:
+        cov = np.cov(coords.T)
+        if cov.ndim == 2:
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            major_axis = eigvecs[:, np.argmax(eigvals)]
+        else:
+            major_axis = np.array([1.0, 0.0])
+    except Exception:
+        major_axis = np.array([1.0, 0.0])
+
+    order = np.argsort(coords @ major_axis)
+    skel_intensities = intensity[skel_rows[order], skel_cols[order]].astype(float)
+    intensity_continuity = float(np.std(np.diff(skel_intensities))) if n_skel >= 2 else 0.0
+
+    return np.array(
+        [skeleton_length, mean_cell_width, skeleton_curvature, intensity_continuity],
+        dtype=float,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shape features  (one convex-hull call per ROI for both metrics)
+# ---------------------------------------------------------------------------
+
+def _pole_regularity(rows: np.ndarray, cols: np.ndarray) -> float:
+    """Local solidity at the outermost 20 % of each cell pole (internal helper)."""
+    if len(rows) < 10:
+        return 0.0
+
+    cy, cx = rows.mean(), cols.mean()
+    coords = np.column_stack([rows - cy, cols - cx]).astype(float)
+    try:
+        cov = np.cov(coords.T)
+        if cov.ndim == 2:
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            major_axis = eigvecs[:, np.argmax(eigvals)]
+        else:
+            major_axis = np.array([1.0, 0.0])
+    except Exception:
+        return 0.0
+
+    proj = coords @ major_axis
+    span = proj.max() - proj.min()
+    if span < 5:
+        return 0.0
+
+    frac = 0.20
+    left_sel = proj <= proj.min() + frac * span
+    right_sel = proj >= proj.max() - frac * span
+
+    def _local_sol(pr, pc):
+        if len(pr) < 4:
+            return 0.0
+        r0, r1, c0, c1 = pr.min(), pr.max(), pc.min(), pc.max()
+        if r1 == r0 or c1 == c0:
+            return 0.0
+        sub = np.zeros((r1 - r0 + 3, c1 - c0 + 3), dtype=bool)
+        sub[pr - r0 + 1, pc - c0 + 1] = True
+        try:
+            hull_area = float(convex_hull_image(sub).sum())
+            return float(sub.sum()) / hull_area if hull_area > 0 else 0.0
+        except Exception:
+            return 0.0
+
+    sl = _local_sol(rows[left_sel], cols[left_sel])
+    sr = _local_sol(rows[right_sel], cols[right_sel])
+    if sl == 0.0 and sr == 0.0:
+        return 0.0
+    if sl == 0.0:
+        return sr
+    if sr == 0.0:
+        return sl
+    return min(sl, sr)
+
+
+def roi_shape_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:
+    """Boundary and pole regularity features.
+
+      [0] border_complexity  — perimeter / convex-hull perimeter.
+                               1.0 = perfectly convex; higher values indicate
+                               irregular / re-entrant boundaries (clumps, lyse).
+      [1] pole_regularity    — minimum local solidity at the two cell poles
+                               (outermost 20 % along the major axis).
+                               ~0.9–1.0 for healthy hemispherical caps; lower
+                               for irregular, fragmented, or lysed pole regions.
+
+    Returns a 2-element float array.  Column names after rename:
+    roi_shape_features-0 → border_complexity
+    roi_shape_features-1 → pole_regularity
+    """
+    rows, cols = np.where(regionmask)
+    if len(rows) < 4:
+        return np.zeros(2, dtype=float)
+
+    # Border complexity
+    try:
+        reg_perim = perimeter(regionmask)
+        hull = convex_hull_image(regionmask)
+        hull_perim = perimeter(hull)
+        border_cmplx = float(reg_perim / hull_perim) if hull_perim > 0 else 1.0
+    except Exception:
+        border_cmplx = 1.0
+
+    pole_reg = _pole_regularity(rows, cols)
+
+    return np.array([border_cmplx, pole_reg], dtype=float)
+
+
+# ---------------------------------------------------------------------------
+# ROI-level tubularness  (Hessian/Frangi response within the cell mask)
+# ---------------------------------------------------------------------------
+
+def roi_tubularness(regionmask: np.ndarray, intensity: np.ndarray) -> float:
+    """Mean Frangi tubularness response within the ROI.
+
+    Measures how rod-like the intensity distribution is *inside* the cell
+    mask.  Unlike the image-level Frangi filter in preprocessing (which
+    enhances the BF image for segmentation), this operates on the isolated
+    FL patch and returns a per-cell score.
+
+    High values indicate a clear ridge-like intensity profile along the cell
+    axis (typical of healthy rods with uniform staining).  Low values suggest
+    a blob-like or disrupted distribution (stressed, swollen, or lysed cells).
+
+    Sigmas 1–3 px cover typical bacterial widths of 3–10 px.  ``black_ridges``
+    is False because bacteria are bright against a dark FL background.
+    """
+    rows, cols = np.where(regionmask)
+    if len(rows) < 9:
+        return 0.0
+
+    r0, r1 = rows.min(), rows.max()
+    c0, c1 = cols.min(), cols.max()
+    patch = intensity[r0 : r1 + 1, c0 : c1 + 1].astype(float)
+    mask_patch = regionmask[r0 : r1 + 1, c0 : c1 + 1]
+
+    vals = patch[mask_patch]
+    v_min, v_max = vals.min(), vals.max()
+    if v_max <= v_min:
+        return 0.0
+
+    patch_norm = (patch - v_min) / (v_max - v_min)
+    patch_norm[~mask_patch] = 0.0
+
+    try:
+        response = frangi(patch_norm, sigmas=range(1, 4), black_ridges=False)
+        return float(np.clip(response[mask_patch].mean(), 0.0, 1.0))
+    except Exception:
+        return 0.0
 
 
 def roi_glcm_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:

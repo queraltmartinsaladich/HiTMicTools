@@ -32,7 +32,9 @@ from HiTMicTools.tracking.track_events import (
 from HiTMicTools.utils import get_timestamps, remove_file_extension
 from HiTMicTools.roianalysis import RoiAnalyser
 from HiTMicTools.data_analysis.analysis_tools import (
-    roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile,
+    roi_skewness, roi_std_dev,
+    roi_glcm_features, roi_radial_profile,
+    roi_skeleton_features, roi_shape_features, roi_tubularness,
 )
 
 from jetraw_tools.image_reader import ImageReader
@@ -317,12 +319,20 @@ class ASCT_instSeg(BasePipeline):
             "solidity",
             "orientation",
             "eccentricity",
+            "perimeter",
+            "equivalent_diameter_area",
+            "feret_diameter_max",
+            "moments_hu",
         ]
         img_logger.info("4.2 - Extracting fluorescence measurements")
         fl_measurements = img_analyser.get_roi_measurements(
             target_channel=pi_channel,
             properties=fl_prop,
-            extra_properties=(roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile),
+            extra_properties=(
+                roi_skewness, roi_std_dev,
+                roi_glcm_features, roi_radial_profile,
+                roi_skeleton_features, roi_shape_features, roi_tubularness,
+            ),
         )
         fl_measurements = fl_measurements.rename(columns={
             "roi_glcm_features-0": "glcm_contrast",
@@ -334,6 +344,19 @@ class ASCT_instSeg(BasePipeline):
             "roi_radial_profile-2": "radial_2",
             "roi_radial_profile-3": "radial_3",
             "roi_radial_profile-4": "radial_4",
+            "roi_skeleton_features-0": "skeleton_length",
+            "roi_skeleton_features-1": "mean_cell_width",
+            "roi_skeleton_features-2": "skeleton_curvature",
+            "roi_skeleton_features-3": "intensity_continuity",
+            "roi_shape_features-0": "border_complexity",
+            "roi_shape_features-1": "pole_regularity",
+            "moments_hu-0": "hu_0",
+            "moments_hu-1": "hu_1",
+            "moments_hu-2": "hu_2",
+            "moments_hu-3": "hu_3",
+            "moments_hu-4": "hu_4",
+            "moments_hu-5": "hu_5",
+            "moments_hu-6": "hu_6",
         })
         bf_meas = img_analyser.get_roi_measurements(
             target_channel=reference_channel,
