@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from scipy.stats import linregress, skew
+from skimage.feature import graycomatrix, graycoprops
 from skimage.measure import find_contours, perimeter
 from skimage.morphology import convex_hull_image, skeletonize
 
@@ -426,3 +427,81 @@ def dilated_measures(regionmask, intensity, structure=np.ones((5, 5)), iteration
     pixel_area = np.sum(dilated_regionmask > 0)
 
     return (std_px, mean_px, min_px, max_px, pixel_area)
+
+
+def roi_glcm_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:
+    """GLCM texture features for a single ROI.
+
+    Computes a Grey-Level Co-occurrence Matrix over 4 angles (0°, 45°, 90°, 135°)
+    at distance=1 with 64 grey levels. Returns the mean over all angles for each
+    of four Haralick properties.
+
+    Returns a 4-element array: [contrast, homogeneity, energy, correlation].
+    When added via extra_properties to regionprops_table, the output columns are
+    roi_glcm_features-0 … roi_glcm_features-3; rename them after extraction.
+    """
+    rows, cols = np.where(regionmask)
+    if len(rows) < 9:
+        return np.zeros(4, dtype=float)
+
+    r0, r1 = rows.min(), rows.max()
+    c0, c1 = cols.min(), cols.max()
+    roi_patch = intensity[r0 : r1 + 1, c0 : c1 + 1].astype(float)
+    mask_patch = regionmask[r0 : r1 + 1, c0 : c1 + 1]
+
+    # Normalize to 0–63 within the ROI; background pixels stay 0
+    roi_vals = roi_patch[mask_patch]
+    v_min, v_max = roi_vals.min(), roi_vals.max()
+    if v_max > v_min:
+        scaled = ((roi_patch - v_min) / (v_max - v_min) * 63).astype(np.uint8)
+    else:
+        scaled = np.zeros_like(roi_patch, dtype=np.uint8)
+    scaled[~mask_patch] = 0
+
+    angles = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
+    try:
+        glcm = graycomatrix(scaled, distances=[1], angles=angles, levels=64,
+                            symmetric=True, normed=True)
+        contrast = float(graycoprops(glcm, "contrast").mean())
+        homogeneity = float(graycoprops(glcm, "homogeneity").mean())
+        energy = float(graycoprops(glcm, "energy").mean())
+        correlation = float(graycoprops(glcm, "correlation").mean())
+    except Exception:
+        return np.zeros(4, dtype=float)
+
+    return np.array([contrast, homogeneity, energy, correlation])
+
+
+def roi_radial_profile(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:
+    """Mean FL intensity in 5 equal-width radial bins from centroid to edge.
+
+    Bins are expressed as fractions of the maximum within-ROI radius, so the
+    profile is comparable across cells of different sizes. Bin 0 is the core,
+    bin 4 is the periphery.
+
+    Returns a 5-element array. When added via extra_properties to
+    regionprops_table, columns are roi_radial_profile-0 … roi_radial_profile-4.
+    """
+    n_bins = 5
+    rows, cols = np.where(regionmask)
+    if len(rows) == 0:
+        return np.zeros(n_bins, dtype=float)
+
+    cy, cx = rows.mean(), cols.mean()
+    distances = np.sqrt((rows - cy) ** 2 + (cols - cx) ** 2)
+    max_dist = distances.max()
+
+    if max_dist == 0:
+        fill = float(intensity[rows[0], cols[0]])
+        return np.full(n_bins, fill, dtype=float)
+
+    bin_edges = np.linspace(0, max_dist, n_bins + 1)
+    profile = np.zeros(n_bins, dtype=float)
+    intensities = intensity[rows, cols]
+
+    for i in range(n_bins):
+        in_bin = (distances >= bin_edges[i]) & (distances < bin_edges[i + 1])
+        if in_bin.any():
+            profile[i] = intensities[in_bin].mean()
+
+    return profile

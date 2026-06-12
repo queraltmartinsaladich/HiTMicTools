@@ -23,9 +23,17 @@ from HiTMicTools.img_processing.mask_ops import (
 from HiTMicTools.img_processing.morphology_corrections import (
     apply_semSeg_morphology_corrections,
 )
+from HiTMicTools.tracking.track_events import (
+    detect_division_events,
+    detect_lysis_events,
+    detect_filamentation_events,
+    compute_fl_trajectory_features,
+)
 from HiTMicTools.utils import get_timestamps, remove_file_extension
 from HiTMicTools.roianalysis import RoiAnalyser
-from HiTMicTools.data_analysis.analysis_tools import roi_skewness, roi_std_dev
+from HiTMicTools.data_analysis.analysis_tools import (
+    roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile,
+)
 
 # TODO: Currently, I can use the cupy based ROI analyser, but performance is lagging.
 # I will start working with the CPU-based ROI analyser and slowly move to the GPU-based.
@@ -292,12 +300,37 @@ class ASCT_semSeg(BasePipeline):
             "minor_axis_length",
             "solidity",
             "orientation",
+            "eccentricity",
         ]
         img_logger.info("4.2 - Extracting fluorescence measurements")
         fl_measurements = img_analyser.get_roi_measurements(
             target_channel=pi_channel,
             properties=fl_prop,
-            extra_properties=(roi_skewness, roi_std_dev),
+            extra_properties=(roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile),
+        )
+        fl_measurements = fl_measurements.rename(columns={
+            "roi_glcm_features-0": "glcm_contrast",
+            "roi_glcm_features-1": "glcm_homogeneity",
+            "roi_glcm_features-2": "glcm_energy",
+            "roi_glcm_features-3": "glcm_correlation",
+            "roi_radial_profile-0": "radial_0",
+            "roi_radial_profile-1": "radial_1",
+            "roi_radial_profile-2": "radial_2",
+            "roi_radial_profile-3": "radial_3",
+            "roi_radial_profile-4": "radial_4",
+        })
+        bf_meas = img_analyser.get_roi_measurements(
+            target_channel=reference_channel,
+            properties=["label", "centroid"],
+            n_workers=1,
+        )
+        bf_meas = bf_meas[["frame", "label", "centroid_0", "centroid_1"]].rename(
+            columns={"centroid_0": "bf_centroid_0", "centroid_1": "bf_centroid_1"}
+        )
+        fl_measurements = fl_measurements.merge(bf_meas, on=["frame", "label"], how="left")
+        fl_measurements["centroid_offset"] = np.sqrt(
+            (fl_measurements["centroid_0"] - fl_measurements["bf_centroid_0"]) ** 2
+            + (fl_measurements["centroid_1"] - fl_measurements["bf_centroid_1"]) ** 2
         )
         fl_measurements["object_class"] = object_classes
 
@@ -361,7 +394,6 @@ class ASCT_semSeg(BasePipeline):
                 )
                 fl_measurements.loc[non_ghost, "pi_class"] = predictions
             fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
-            fl_measurements["file"] = name
 
             # Generate summary data using the dedicated method
             d_summary = self.generate_data_summary(
@@ -382,6 +414,21 @@ class ASCT_semSeg(BasePipeline):
                 fl_measurements["pi_class"] = "piNEG"
                 fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
             d_summary = pd.DataFrame()
+
+        # 4.7 Track event detection + FL trajectory (requires final pi_class)
+        fl_measurements["file"] = name
+        if self.tracking and self.cell_tracker is not None:
+            img_logger.info("4.7 - Detecting track events", show_memory=False)
+            fl_measurements, div_counts = detect_division_events(fl_measurements)
+            fl_measurements, lys_counts = detect_lysis_events(fl_measurements)
+            fl_measurements, fil_counts = detect_filamentation_events(fl_measurements)
+            fl_measurements = compute_fl_trajectory_features(fl_measurements)
+            img_logger.info(
+                f"4.7 - Track events: "
+                f"{div_counts['n_division_events']} divisions, "
+                f"{lys_counts['n_lysis_events']} lysis events, "
+                f"{fil_counts['n_filamentation_events']} filamentation events"
+            )
 
         # 5. Export data --------------------------------------------
         export_path = os.path.join(self.output_path, name)

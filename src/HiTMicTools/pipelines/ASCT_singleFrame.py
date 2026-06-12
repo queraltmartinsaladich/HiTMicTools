@@ -26,7 +26,9 @@ from HiTMicTools.img_processing.morphology_corrections import (
 )
 from HiTMicTools.utils import remove_file_extension
 from HiTMicTools.roianalysis import RoiAnalyser
-from HiTMicTools.data_analysis.analysis_tools import roi_skewness, roi_std_dev
+from HiTMicTools.data_analysis.analysis_tools import (
+    roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile,
+)
 
 # TODO: Currently, I can use the cupy based ROI analyser, but performance is lagging.
 # I will start working with the CPU-based ROI analyser and slowly move to the GPU-based.
@@ -251,7 +253,7 @@ class ASCT_singleFrame(BasePipeline):
         # 4 Calc. measurements --------------------------------------------
         img_logger.info("4 - Starting measurements", show_memory=True)
         fl_measurements = self._extract_measurements(
-            img_analyser, object_classes, pi_channel, img_logger
+            img_analyser, object_classes, reference_channel, pi_channel, img_logger
         )
 
         # Override ghost cells: added by FL union mask, definitionally piPOS
@@ -791,6 +793,7 @@ class ASCT_singleFrame(BasePipeline):
         self,
         img_analyser: RoiAnalyser,
         object_classes: List[str],
+        reference_channel: int,
         pi_channel: int,
         logger: MemoryLogger
     ) -> pd.DataFrame:
@@ -818,14 +821,38 @@ class ASCT_singleFrame(BasePipeline):
         fl_prop = [
             "label", "centroid", "max_intensity", "min_intensity",
             "mean_intensity", "area", "major_axis_length",
-            "minor_axis_length", "solidity", "orientation",
+            "minor_axis_length", "solidity", "orientation", "eccentricity",
         ]
 
         logger.info("Extracting fluorescence measurements")
         fl_measurements = img_analyser.get_roi_measurements(
             target_channel=pi_channel,
             properties=fl_prop,
-            extra_properties=(roi_skewness, roi_std_dev),
+            extra_properties=(roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile),
+        )
+        fl_measurements = fl_measurements.rename(columns={
+            "roi_glcm_features-0": "glcm_contrast",
+            "roi_glcm_features-1": "glcm_homogeneity",
+            "roi_glcm_features-2": "glcm_energy",
+            "roi_glcm_features-3": "glcm_correlation",
+            "roi_radial_profile-0": "radial_0",
+            "roi_radial_profile-1": "radial_1",
+            "roi_radial_profile-2": "radial_2",
+            "roi_radial_profile-3": "radial_3",
+            "roi_radial_profile-4": "radial_4",
+        })
+        bf_meas = img_analyser.get_roi_measurements(
+            target_channel=reference_channel,
+            properties=["label", "centroid"],
+            n_workers=1,
+        )
+        bf_meas = bf_meas[["frame", "label", "centroid_0", "centroid_1"]].rename(
+            columns={"centroid_0": "bf_centroid_0", "centroid_1": "bf_centroid_1"}
+        )
+        fl_measurements = fl_measurements.merge(bf_meas, on=["frame", "label"], how="left")
+        fl_measurements["centroid_offset"] = np.sqrt(
+            (fl_measurements["centroid_0"] - fl_measurements["bf_centroid_0"]) ** 2
+            + (fl_measurements["centroid_1"] - fl_measurements["bf_centroid_1"]) ** 2
         )
         fl_measurements["object_class"] = object_classes
         fl_measurements["frame"] = 0  # Single frame always 0
