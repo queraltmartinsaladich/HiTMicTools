@@ -107,7 +107,7 @@ def _add_skeleton_features(
 def apply_instSeg_morphology_corrections(
     fl_measurements: pd.DataFrame,
     labeled_mask: Optional[np.ndarray] = None,
-    spaghetti_ar: float = 8.0,
+    spaghetti_ar: float = 5.0,
     spaghetti_solidity: float = 0.72,
     lysis_solidity: float = 0.45,
     lysis_area_frac: float = 0.4,
@@ -126,7 +126,7 @@ def apply_instSeg_morphology_corrections(
         fl_measurements: DataFrame containing at minimum object_class, area,
             major_axis_length, minor_axis_length, solidity, frame, label.
         labeled_mask: (T, S, C, X, Y) integer mask array from img_analyser.
-        spaghetti_ar: Aspect-ratio threshold for R1.  Default 8.0.
+        spaghetti_ar: Aspect-ratio threshold for R1.  Default 5.0.
         spaghetti_solidity: Solidity ceiling for R1.  Default 0.72.
         lysis_solidity: Solidity ceiling for R2.  Default 0.45.
         lysis_area_frac: Area floor (× median) for R2.  Default 0.4.

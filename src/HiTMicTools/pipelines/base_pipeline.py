@@ -610,6 +610,21 @@ class BasePipeline(ABC):
         )
         return species_cfg
 
+    def _get_morphology_kwargs(self) -> dict:
+        """Return species-specific kwargs for apply_instSeg_morphology_corrections.
+
+        Reads the ``morphology_corrections`` block from the species config.
+        Returns an empty dict if no species is set or no block is present,
+        so the function falls back to its own defaults.
+        """
+        species = getattr(self, "species", None)
+        if not species:
+            return {}
+        species_config_path = getattr(self, "species_config_path", None)
+        species_cfg = self._load_species_config(species, species_config_path)
+        morph = species_cfg.get("morphology_corrections", {})
+        return dict(morph) if morph else {}
+
     def config_image_analysis(
         self,
         reference_channel: int,

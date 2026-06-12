@@ -415,7 +415,8 @@ class ASCT_instSeg(BasePipeline):
         # 4.4 Morphology-based label corrections
         img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
         fl_measurements, morph_counts = apply_instSeg_morphology_corrections(
-            fl_measurements, img_analyser.labeled_mask
+            fl_measurements, img_analyser.labeled_mask,
+            **self._get_morphology_kwargs()
         )
         img_logger.info(
             f"4.4 - Morphology corrections: "

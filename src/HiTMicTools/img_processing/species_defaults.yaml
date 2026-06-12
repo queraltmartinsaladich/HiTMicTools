@@ -12,6 +12,12 @@
 #   phase_congruency      – Log-Gabor phase congruency; low-contrast edge detection
 #   fl_normalization      – Percentile-clip FL channel to [0, 1]
 #
+# morphology_corrections: thresholds for apply_instSeg_morphology_corrections().
+#   spaghetti_ar      – AR floor for R1 (filamentation → long).
+#   spaghetti_solidity – Solidity ceiling for R1.  Straight stressed rods have
+#                        solidity ~0.90-0.95; keep at 0.72 unless you see false
+#                        positives on well-separated elongated cells.
+#
 # Species identifiers (case-insensitive in pipeline dispatch):
 #   ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera | s_aureus
 
@@ -38,6 +44,11 @@ species:
       enabled: true
       percentile_low: 1.0
       percentile_high: 99.0
+    morphology_corrections:
+      # Early filamentation starts at AR ~5; solidity < 0.72 guards straight
+      # stressed rods (which stay single-cell).
+      spaghetti_ar: 5.0
+      spaghetti_solidity: 0.72
 
   # ── Pseudomonas aeruginosa ────────────────────────────────────────────────
   # Key challenges: OMV puncta, EPS matrix, elongated filaments/spaghetti forms,
@@ -63,6 +74,11 @@ species:
       enabled: true
       percentile_low: 1.0
       percentile_high: 99.0
+    morphology_corrections:
+      # P. aeruginosa normal rods reach AR ~4-5; raise threshold slightly to
+      # avoid false long-class on unstressed elongated cells.
+      spaghetti_ar: 6.0
+      spaghetti_solidity: 0.72
 
   # ── Mycobacterium tuberculosis ────────────────────────────────────────────
   # Key challenges: serpentine cording, mycolic-acid diffraction halos,
@@ -88,6 +104,11 @@ species:
       enabled: true
       percentile_low: 1.0
       percentile_high: 99.0
+    morphology_corrections:
+      # Cording is not classical filamentation; keep R1 at high threshold to
+      # avoid misclassifying corded bundles as long.
+      spaghetti_ar: 8.0
+      spaghetti_solidity: 0.72
 
   # ── Mycobacterium abscessus ───────────────────────────────────────────────
   # Key challenges: hydrophobic 3-D aggregation, rough/smooth phenotypic disparity,
@@ -110,6 +131,9 @@ species:
       enabled: true
       percentile_low: 1.0
       percentile_high: 99.0
+    morphology_corrections:
+      spaghetti_ar: 8.0
+      spaghetti_solidity: 0.72
 
   # ── Mycobacterium chimaera ────────────────────────────────────────────────
   # Key challenges: meniscus distortions, dense 3-D biofilm, low phase contrast
@@ -135,6 +159,9 @@ species:
       enabled: true
       percentile_low: 1.0
       percentile_high: 99.0
+    morphology_corrections:
+      spaghetti_ar: 8.0
+      spaghetti_solidity: 0.72
 
   # ── Staphylococcus aureus ─────────────────────────────────────────────────
   # Key challenges: 3-D grape-like clusters, sub-resolution edge diffraction,
@@ -156,3 +183,8 @@ species:
       enabled: true
       percentile_low: 1.0
       percentile_high: 99.0
+    morphology_corrections:
+      # Cocci do not filament; set AR threshold effectively infinite to
+      # disable R1 entirely.
+      spaghetti_ar: 99.0
+      spaghetti_solidity: 0.72
