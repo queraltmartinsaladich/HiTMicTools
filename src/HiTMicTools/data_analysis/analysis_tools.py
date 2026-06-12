@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import cv2
 import numpy as np
 import pandas as pd
+from scipy.ndimage import convolve as _nd_convolve
 from scipy.stats import linregress, skew
 from skimage.feature import graycomatrix, graycoprops
 from skimage.filters import frangi
@@ -712,3 +713,33 @@ def roi_radial_profile(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndar
             profile[i] = intensities[in_bin].mean()
 
     return profile
+
+
+# ---------------------------------------------------------------------------
+# Skeleton branch points  (topology feature — clumps vs single rods)
+# ---------------------------------------------------------------------------
+
+_BRANCH_KERNEL = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int32)
+
+
+def roi_skeleton_branch_points(regionmask: np.ndarray, intensity: np.ndarray) -> int:
+    """Count skeleton branch points in the ROI.
+
+    Skeletonizes the region mask and counts pixels with ≥ 3 skeleton
+    neighbours (8-connected).  A clump of merged cells produces ≥ 1 branch
+    point; a straight single rod has 0.  This is the same metric computed
+    by morphology_corrections to drive R3, but extracted here as a formal
+    feature so it is always present in fl_measurements regardless of whether
+    morphology corrections are applied.
+
+    Returns 0 for masks with fewer than 5 foreground pixels.
+    """
+    if regionmask.sum() < 5:
+        return 0
+    skel = skeletonize(regionmask)
+    if not skel.any():
+        return 0
+    neighbors = _nd_convolve(
+        skel.astype(np.int32), _BRANCH_KERNEL, mode="constant", cval=0
+    )
+    return int((skel & (neighbors >= 3)).sum())

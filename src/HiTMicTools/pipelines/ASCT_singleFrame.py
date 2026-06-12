@@ -29,6 +29,7 @@ from HiTMicTools.roianalysis import RoiAnalyser
 from HiTMicTools.data_analysis.analysis_tools import (
     roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile,
     roi_skeleton_features, roi_shape_features, roi_tubularness,
+    roi_skeleton_branch_points,
 )
 
 # TODO: Currently, I can use the cupy based ROI analyser, but performance is lagging.
@@ -835,6 +836,7 @@ class ASCT_singleFrame(BasePipeline):
                 roi_skewness, roi_std_dev,
                 roi_glcm_features, roi_radial_profile,
                 roi_skeleton_features, roi_shape_features, roi_tubularness,
+                roi_skeleton_branch_points,
             ),
         )
         fl_measurements = fl_measurements.rename(columns={
@@ -860,6 +862,7 @@ class ASCT_singleFrame(BasePipeline):
             "moments_hu-4": "hu_4",
             "moments_hu-5": "hu_5",
             "moments_hu-6": "hu_6",
+            "roi_skeleton_branch_points": "skeleton_branch_points",
         })
         bf_meas = img_analyser.get_roi_measurements(
             target_channel=reference_channel,
