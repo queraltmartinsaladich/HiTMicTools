@@ -377,6 +377,19 @@ class ASCT_semSeg(BasePipeline):
             fl_measurements["background"], axis=0
         )
 
+        if align_frames and hasattr(ip, "frame_shifts"):
+            drift_df = pd.DataFrame({
+                "frame": np.arange(ip.frame_shifts.shape[0]),
+                "drift_dx": ip.frame_shifts[:, 0],
+                "drift_dy": ip.frame_shifts[:, 1],
+            })
+            fl_measurements = fl_measurements.merge(drift_df, on="frame", how="left")
+            img_logger.info(
+                f"4.3 - Alignment drift: "
+                f"dx=[{ip.frame_shifts[:, 0].min():.1f}, {ip.frame_shifts[:, 0].max():.1f}] px  "
+                f"dy=[{ip.frame_shifts[:, 1].min():.1f}, {ip.frame_shifts[:, 1].max():.1f}] px"
+            )
+
         # 4.4 Morphology-based label corrections
         img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
         fl_measurements, morph_counts = apply_semSeg_morphology_corrections(

@@ -95,35 +95,45 @@ class ImagePreprocessor:
         alignment_config: Optional[Dict] = None,
         bbox: Optional[Tuple[int, int, int, int]] = None,
         reference_type: str = "static",
+        subpixel: bool = False,
+        upsample_factor: int = 10,
     ) -> None:
         """
-        Align the image using a reference channel with StackAligner.
+        Align the image stack using a reference channel.
+
+        Uses StackAligner (OpenCV TM_CCOEFF_NORMED, integer-pixel) by default.
+        Pass ``subpixel=True`` to use DFT-upsampling phase cross-correlation
+        (skimage) for sub-pixel precision — recommended for small cells or dense
+        FOVs where a 1-pixel shift error is a meaningful fraction of cell size.
+
+        After alignment ``self.frame_shifts`` is set to an (T, 2) float array of
+        [dx, dy] per frame (column-first convention, matching StackAligner tmats).
+        These are the translations applied to register each frame to the reference.
+        For ``reference_type='dynamic'`` shifts are frame-to-frame; for
+        ``reference_type='static'`` they are cumulative from the reference frame.
 
         Args:
-            ref_channel (int): Reference channel index.
-            ref_slice (int): Reference slice index.
-            compres_align (float, default=0): Compression ratio to crop image for alignment.
-            normalise_image (bool, default=True): Whether to normalize the image.
-            crop_image (bool, default=True): Whether to crop the black region after alignment.
-            alignment_config (Optional[Dict], default=None): Configuration for StackAligner.
-            bbox (Optional[Tuple[int, int, int, int]], default=None): Bounding box for template matching.
-            reference_type (str, default="static"): 'static' or 'dynamic' reference type.
-
-        Returns:
-            None
+            ref_channel: BF channel index used as registration reference.
+            ref_slice: S-dimension slice index; also the reference frame in static mode.
+            compres_align: Unused; kept for backward compatibility.
+            normalise_image: Normalise each frame to its mean before matching.
+            crop_image: Crop the black border introduced by translation.
+            alignment_config: Config dict forwarded to StackAligner (NCC path only).
+            bbox: (x, y, w, h) template crop region. Defaults to central quarter.
+            reference_type: 'static' — all frames vs. one fixed frame;
+                'dynamic' — each frame vs. the previous frame.
+            subpixel: Use phase cross-correlation instead of NCC template matching.
+            upsample_factor: DFT upsampling factor (subpixel=True only).
+                Precision ≈ 1/upsample_factor pixels. Default 10 → 0.1 px.
         """
-        # check that compress_align is between 0-1
         assert 0 <= compres_align <= 1, "compress_align must be between 0 and 1"
 
-        # Align with reference channel
         reference_channel = self.img[:, ref_slice, ref_channel, :, :]
-
         if normalise_image:
             reference_channel = reference_channel / np.mean(
                 reference_channel, axis=(1, 2), keepdims=True
             )
 
-        # Define the bounding box if not provided
         if bbox is None:
             height, width = reference_channel.shape[1], reference_channel.shape[2]
             box_width = width // 2
@@ -132,12 +142,15 @@ class ImagePreprocessor:
             y = (height - box_height) // 2
             bbox = (x, y, box_width, box_height)
 
-        # Set up the alignment configuration
+        if subpixel:
+            self._align_subpixel(
+                reference_channel, ref_slice, bbox, reference_type,
+                upsample_factor, crop_image,
+            )
+            return
+
         config = AlignmentConfig(**(alignment_config or {}))
         self.aligner = StackAligner(config=config)
-
-        # Register the stack
-        # Note that reference_channel is not stored as it might be scaled to mean
         ref_aligned = self.aligner.register_stack(
             reference_channel,
             bbox=bbox,
@@ -145,20 +158,80 @@ class ImagePreprocessor:
             reference_type=reference_type,
         )
         self.tmats = self.aligner.translation_matrices
-
-        # Apply the transformation to the entire image stack (all channels and slices)
-        index_table = stack_indexer(
-            range(self.frames_size), range(self.slices_size), range(self.channels_size)
+        # dx = tmats[:, 0, 2], dy = tmats[:, 1, 2] in OpenCV (column, row) convention
+        self.frame_shifts = np.column_stack(
+            [self.tmats[:, 0, 2], self.tmats[:, 1, 2]]
         )
-        index_table_sc = [(s, c) for t, s, c in index_table]
-        index_table_sc = set(index_table_sc)
+
+        index_table_sc = set(
+            (s, c)
+            for t, s, c in stack_indexer(
+                range(self.frames_size), range(self.slices_size), range(self.channels_size)
+            )
+        )
         for s, c in index_table_sc:
-            img_stack = self.img[:, s, c, :, :]
-            reg_stack = self.aligner.transform_stack(img_stack)
-            self.img[:, s, c, :, :] = reg_stack
+            self.img[:, s, c, :, :] = self.aligner.transform_stack(self.img[:, s, c, :, :])
 
         if crop_image:
             min_projection = np.min(ref_aligned, axis=0)
+            start_h, end_h, start_w, end_w = crop_black_region(min_projection)
+            self.img = self.img[:, :, :, start_h:end_h, start_w:end_w]
+
+    def _align_subpixel(
+        self,
+        reference_channel: np.ndarray,
+        ref_slice: int,
+        bbox: Tuple[int, int, int, int],
+        reference_type: str,
+        upsample_factor: int,
+        crop_image: bool,
+    ) -> None:
+        """Sub-pixel registration via DFT-upsampling phase cross-correlation."""
+        from skimage.registration import phase_cross_correlation
+        from scipy.ndimage import shift as nd_shift
+
+        T = reference_channel.shape[0]
+        x, y, bw, bh = bbox
+        ref_frame_idx = ref_slice if ref_slice >= 0 else T + ref_slice
+        ref_static = reference_channel[ref_frame_idx, y:y + bh, x:x + bw]
+
+        raw_shifts = np.zeros((T, 2), dtype=float)  # (dy, dx) per frame, row-col
+        for t in range(T):
+            ref_crop = (
+                ref_static if reference_type == "static"
+                else reference_channel[max(0, t - 1), y:y + bh, x:x + bw]
+            )
+            shift_vec, _, _ = phase_cross_correlation(
+                ref_crop,
+                reference_channel[t, y:y + bh, x:x + bw],
+                upsample_factor=upsample_factor,
+            )
+            raw_shifts[t] = shift_vec  # (dy, dx)
+
+        orig_dtype = self.img.dtype
+        for t in range(T):
+            dy, dx = raw_shifts[t]
+            if dy == 0.0 and dx == 0.0:
+                continue
+            for s in range(self.slices_size):
+                for c in range(self.channels_size):
+                    frame = self.img[t, s, c].astype(np.float32)
+                    self.img[t, s, c] = nd_shift(
+                        frame, [dy, dx], mode="constant", cval=0.0
+                    ).astype(orig_dtype)
+
+        # Store as (dx, dy) — column-first, matching StackAligner tmats convention
+        self.frame_shifts = np.column_stack([raw_shifts[:, 1], raw_shifts[:, 0]])
+
+        if crop_image:
+            aligned_ref = np.stack([
+                nd_shift(
+                    reference_channel[t].astype(np.float32),
+                    raw_shifts[t], mode="constant", cval=0.0,
+                )
+                for t in range(T)
+            ])
+            min_projection = np.min(aligned_ref, axis=0)
             start_h, end_h, start_w, end_w = crop_black_region(min_projection)
             self.img = self.img[:, :, :, start_h:end_h, start_w:end_w]
 
