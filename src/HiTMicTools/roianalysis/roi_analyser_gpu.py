@@ -367,6 +367,7 @@ class RoiAnalyser:
         target_slice=0,
         properties=["label", "centroid", "mean_intensity"],
         extra_properties=None,
+        frame_extra_properties=None,
     ):
         """
         Get measurements for each ROI in the labeled mask for a specific channel and all frames.
@@ -398,6 +399,7 @@ class RoiAnalyser:
 
         # Collect measurements from all frames
         all_roi_properties = []
+        all_frame_extra_dfs = []
         frame_roi_counts = []  # Track ROI count per frame for vectorized metadata
 
         for frame in range(img.shape[0]):
@@ -416,8 +418,16 @@ class RoiAnalyser:
             # Track how many ROIs in this frame (for vectorized metadata construction)
             num_rois_in_frame = len(roi_properties.get('label', []))
             frame_roi_counts.append(num_rois_in_frame)
-
             all_roi_properties.append(roi_properties)
+
+            if frame_extra_properties:
+                parts = [frame_fn(labeled_mask_frame, img_frame)
+                         for frame_fn in frame_extra_properties]
+                merged = parts[0]
+                for part in parts[1:]:
+                    merged = merged.merge(part, on="label", how="left")
+                merged["frame"] = frame
+                all_frame_extra_dfs.append(merged)
 
         # Single concatenation (GPU-optimized) instead of T concatenations
         all_roi_properties_cudf = cudf.concat(
@@ -457,5 +467,11 @@ class RoiAnalyser:
 
         # Single GPU→CPU transfer at the very end (good practice)
         all_roi_properties_df = all_roi_properties_cudf.to_pandas()
+
+        if all_frame_extra_dfs:
+            extra_df = pd.concat(all_frame_extra_dfs, ignore_index=True)
+            all_roi_properties_df = all_roi_properties_df.merge(
+                extra_df, on=["label", "frame"], how="left"
+            )
 
         return all_roi_properties_df

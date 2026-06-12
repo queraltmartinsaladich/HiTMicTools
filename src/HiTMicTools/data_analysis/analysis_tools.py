@@ -646,6 +646,49 @@ def roi_tubularness(regionmask: np.ndarray, intensity: np.ndarray) -> float:
         return 0.0
 
 
+def frame_tubularness(labeled_mask: np.ndarray, intensity: np.ndarray) -> pd.DataFrame:
+    """Whole-frame vectorized tubularness via a single Frangi pass.
+
+    Replaces the per-ROI roi_tubularness callable (which ran one frangi() per
+    cell).  A single frangi() call on the full frame is ~N× faster for N cells.
+
+    Normalization uses frame-level 1st–99th percentile, which is more robust
+    than per-cell min/max for frames with variable background.
+
+    Returns a DataFrame with columns ['label', 'roi_tubularness'] — the column
+    name matches roi_tubularness so rename dicts do not need updating.
+    """
+    labels = np.unique(labeled_mask)
+    labels = labels[labels != 0].astype(int)
+    if len(labels) == 0:
+        return pd.DataFrame({"label": np.array([], dtype=int),
+                             "roi_tubularness": np.array([], dtype=float)})
+
+    img_float = intensity.astype(float)
+    p1, p99 = np.percentile(img_float, [1, 99])
+    if p99 <= p1:
+        return pd.DataFrame({"label": labels,
+                             "roi_tubularness": np.zeros(len(labels), dtype=float)})
+
+    img_norm = np.clip((img_float - p1) / (p99 - p1), 0.0, 1.0)
+
+    try:
+        response = frangi(img_norm, sigmas=range(1, 4), black_ridges=False)
+    except Exception:
+        return pd.DataFrame({"label": labels,
+                             "roi_tubularness": np.zeros(len(labels), dtype=float)})
+
+    flat_labels = labeled_mask.ravel().astype(int)
+    flat_resp = response.ravel()
+    max_label = int(labeled_mask.max())
+    sums = np.bincount(flat_labels, weights=flat_resp, minlength=max_label + 1)
+    counts = np.bincount(flat_labels, minlength=max_label + 1)
+    per_label_mean = np.where(counts > 0, sums / np.maximum(counts, 1), 0.0)
+    tubularness = np.clip(per_label_mean[labels], 0.0, 1.0)
+
+    return pd.DataFrame({"label": labels, "roi_tubularness": tubularness})
+
+
 def roi_glcm_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:
     """GLCM texture features for a single ROI.
 

@@ -34,7 +34,7 @@ from HiTMicTools.roianalysis import RoiAnalyser
 from HiTMicTools.data_analysis.analysis_tools import (
     roi_skewness, roi_std_dev,
     roi_glcm_features, roi_radial_profile,
-    roi_skeleton_features, roi_shape_features, roi_tubularness,
+    roi_skeleton_features, roi_shape_features, frame_tubularness,
 )
 
 from jetraw_tools.image_reader import ImageReader
@@ -331,8 +331,9 @@ class ASCT_instSeg(BasePipeline):
             extra_properties=(
                 roi_skewness, roi_std_dev,
                 roi_glcm_features, roi_radial_profile,
-                roi_skeleton_features, roi_shape_features, roi_tubularness,
+                roi_skeleton_features, roi_shape_features,
             ),
+            frame_extra_properties=(frame_tubularness,),
         )
         fl_measurements = fl_measurements.rename(columns={
             "roi_glcm_features-0": "glcm_contrast",

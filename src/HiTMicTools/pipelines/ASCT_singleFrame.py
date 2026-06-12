@@ -28,7 +28,7 @@ from HiTMicTools.utils import remove_file_extension
 from HiTMicTools.roianalysis import RoiAnalyser
 from HiTMicTools.data_analysis.analysis_tools import (
     roi_skewness, roi_std_dev, roi_glcm_features, roi_radial_profile,
-    roi_skeleton_features, roi_shape_features, roi_tubularness,
+    roi_skeleton_features, roi_shape_features, frame_tubularness,
 )
 
 # TODO: Currently, I can use the cupy based ROI analyser, but performance is lagging.
@@ -834,8 +834,9 @@ class ASCT_singleFrame(BasePipeline):
             extra_properties=(
                 roi_skewness, roi_std_dev,
                 roi_glcm_features, roi_radial_profile,
-                roi_skeleton_features, roi_shape_features, roi_tubularness,
+                roi_skeleton_features, roi_shape_features,
             ),
+            frame_extra_properties=(frame_tubularness,),
         )
         fl_measurements = fl_measurements.rename(columns={
             "roi_glcm_features-0": "glcm_contrast",

@@ -352,6 +352,7 @@ class RoiAnalyser:
         target_slice=0,
         properties=["label", "centroid", "mean_intensity"],
         extra_properties=None,
+        frame_extra_properties=None,
         n_workers=None,
     ):
         """
@@ -394,12 +395,14 @@ class RoiAnalyser:
         if n_workers > 1 and n_frames >= 20:
             all_roi_properties_df = self._get_roi_measurements_parallel(
                 img, labeled_mask, properties, extra_properties,
-                target_channel, target_slice, n_workers
+                target_channel, target_slice, n_workers,
+                frame_extra_properties=frame_extra_properties,
             )
         else:
             all_roi_properties_df = self._get_roi_measurements_sequential(
                 img, labeled_mask, properties, extra_properties,
-                target_channel, target_slice
+                target_channel, target_slice,
+                frame_extra_properties=frame_extra_properties,
             )
 
         # Process coordinates if present
@@ -420,7 +423,7 @@ class RoiAnalyser:
 
     def _get_roi_measurements_sequential(
         self, img, labeled_mask, properties, extra_properties,
-        target_channel, target_slice
+        target_channel, target_slice, frame_extra_properties=None
     ):
         """
         Sequential ROI measurement computation.
@@ -450,6 +453,10 @@ class RoiAnalyser:
                 extra_properties=extra_properties,
             )
             roi_properties_df = pd.DataFrame(roi_properties)
+            if frame_extra_properties:
+                for frame_fn in frame_extra_properties:
+                    frame_df = frame_fn(labeled_mask_frame, img_frame)
+                    roi_properties_df = roi_properties_df.merge(frame_df, on="label", how="left")
             roi_properties_df["frame"] = frame
             roi_properties_df["slice"] = target_channel
             roi_properties_df["channel"] = target_slice
@@ -460,7 +467,7 @@ class RoiAnalyser:
 
     def _get_roi_measurements_parallel(
         self, img, labeled_mask, properties, extra_properties,
-        target_channel, target_slice, n_workers
+        target_channel, target_slice, n_workers, frame_extra_properties=None
     ):
         """
         Parallel ROI measurement computation using joblib.
@@ -497,7 +504,12 @@ class RoiAnalyser:
                 separator="_",
                 extra_properties=extra_properties,
             )
-            return frame_idx, roi_properties
+            roi_properties_df = pd.DataFrame(roi_properties)
+            if frame_extra_properties:
+                for frame_fn in frame_extra_properties:
+                    frame_df = frame_fn(labeled_mask_frame, img_frame)
+                    roi_properties_df = roi_properties_df.merge(frame_df, on="label", how="left")
+            return frame_idx, roi_properties_df
 
         # Prepare work items
         work_items = [
@@ -515,8 +527,7 @@ class RoiAnalyser:
 
         # Build DataFrames with frame metadata
         all_roi_properties = []
-        for frame_idx, roi_properties in results:
-            roi_properties_df = pd.DataFrame(roi_properties)
+        for frame_idx, roi_properties_df in results:
             roi_properties_df["frame"] = frame_idx
             roi_properties_df["slice"] = target_channel
             roi_properties_df["channel"] = target_slice
