@@ -428,7 +428,7 @@ class ASCT_instSeg(BasePipeline):
         # 4.5 Object tracking (if enabled)
         if self.tracking and self.cell_tracker is not None:
             img_logger.info("4.5 - Running object tracking")
-            track_features = fl_prop[5:10]
+            track_features = ["area", "major_axis_length", "minor_axis_length", "solidity", "orientation"]
             self.cell_tracker.set_features(track_features)
             try:
                 fl_measurements = self.cell_tracker.track_objects(

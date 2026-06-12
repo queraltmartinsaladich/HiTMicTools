@@ -1,5 +1,5 @@
 """
-Hungarian tracker v2 with gap bridging.
+Hungarian tracker v2 with gap bridging and appearance-cost support.
 
 Compared to v1 (single-frame-back linking only):
   - Adds `gap_bridge_frames` parameter. A track whose last detection was up to
@@ -11,14 +11,26 @@ Compared to v1 (single-frame-back linking only):
   - API-compatible with v1: `track_objects(measurements_df, ...)` returns the
     same DataFrame with `trackid` column added.
 
-Rationale: on e009 HK wells (stationary dead cells), median track length was
-14/32 frames with v1 because 2% per-frame detection miss rate compounds to
-50% full-coverage. Gap bridging recovers tracks that survive single-frame
-detection dropouts without requiring distance cutoff to change.
+Compared to v2 (centroid-only cost):
+  - Adds `feature_weights` parameter. When non-empty, appearance features
+    (e.g. area, solidity) are incorporated into the cost matrix as normalised
+    relative differences, scaled to pixel-cost units. This penalises mislinks
+    between cells with very different morphologies (e.g. single-cell → clump).
+  - `max_distance` now gates *total* cost (centroid + appearance), not just
+    Euclidean distance.  For typical cells the appearance penalty is small
+    (<1 px); it only materially affects cases where the morphology diverges.
+  - Default weights (DEFAULT_WEIGHTS) penalise area (0.3) and solidity (0.2).
+    Pass `feature_weights={}` to revert to centroid-only behaviour.
+
+Rationale for appearance cost: on dense well images, cells near a clump are
+sometimes mislinked into the clump between frames because the clump centroid
+happens to be slightly closer.  Adding a relative area penalty of 0.3 adds
+~6 px of virtual distance for a 3× area mismatch, typically breaking the
+mislink without affecting normal same-size cell links.
 """
 
 import logging
-from typing import Optional, Tuple, List
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -27,23 +39,50 @@ from scipy.spatial.distance import cdist
 
 
 class HungarianTracker:
-    """Frame-to-frame optimal assignment tracker with piPOS lock-in and gap bridging."""
+    """Frame-to-frame optimal assignment tracker with appearance cost,
+    piPOS lock-in, and gap bridging."""
 
-    def __init__(self, max_distance: float = 25.0, gap_bridge_frames: int = 2):
+    DEFAULT_WEIGHTS: Dict[str, float] = {"area": 0.3, "solidity": 0.2}
+
+    def __init__(
+        self,
+        max_distance: float = 25.0,
+        gap_bridge_frames: int = 2,
+        feature_weights: Optional[Dict[str, float]] = None,
+    ):
         """
         Args:
-            max_distance: Maximum linking distance in pixels. Pairs beyond
-                this threshold are left unlinked (new track ID assigned).
-            gap_bridge_frames: Number of consecutive missed frames allowed
-                before a track is retired. 0 = v1 behavior (no bridging).
-                Default 2 (tolerates 2 missed frames).
+            max_distance: Maximum total linking cost (pixels). Pairs whose
+                combined centroid + appearance cost exceeds this are left
+                unlinked.  For centroid-only mode the threshold is pure
+                Euclidean distance; with appearance features it is the
+                weighted sum.
+            gap_bridge_frames: Consecutive missed frames tolerated before a
+                track is retired.  0 = no bridging (v1 behaviour).
+            feature_weights: Mapping of feature column name → weight.  Each
+                non-zero entry adds a normalised relative-difference penalty
+                (scaled to pixel units by max_distance) to the cost matrix.
+                ``None`` uses DEFAULT_WEIGHTS.  Pass ``{}`` for centroid-only.
         """
         self.max_distance = max_distance
         self.gap_bridge_frames = gap_bridge_frames
+        self.feature_weights: Dict[str, float] = (
+            dict(self.DEFAULT_WEIGHTS) if feature_weights is None else dict(feature_weights)
+        )
+        self.features: List[str] = []
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def set_features(self, features: List[str]) -> None:
-        """No-op for API compatibility with CellTracker."""
-        pass
+        """Store feature list (CellTracker API compatibility).
+
+        For HungarianTracker the appearance cost is driven by
+        ``feature_weights``; ``set_features`` just records the list for
+        external inspection and future use.
+        """
+        self.features = list(features)
 
     def track_objects(
         self,
@@ -51,17 +90,18 @@ class HungarianTracker:
         volume_bounds: Optional[Tuple[int, int]] = None,
         logger: Optional[logging.Logger] = None,
     ) -> pd.DataFrame:
-        """
-        Assign persistent track IDs across frames using Hungarian assignment
-        with gap bridging.
+        """Assign persistent track IDs across frames.
 
         Args:
-            measurements_df: DataFrame with columns: frame, centroid_0, centroid_1
-            volume_bounds: Ignored (kept for API compatibility with CellTracker).
+            measurements_df: DataFrame with columns: frame, centroid_0,
+                centroid_1.  Any columns listed in ``feature_weights`` that
+                are present are used for appearance cost.
+            volume_bounds: Ignored (API compatibility with CellTracker).
             logger: Optional logger instance.
 
         Returns:
-            Input DataFrame with 'trackid' column added (int32, -1 for unlinked).
+            Input DataFrame with ``trackid`` column added (int32; -1 for
+            unlinked detections).
         """
         df = measurements_df.copy()
         frames = sorted(df["frame"].unique())
@@ -70,33 +110,56 @@ class HungarianTracker:
             df["trackid"] = np.int32(-1)
             return df
 
+        # Appearance features available in this df
+        active_feats = [
+            f for f, w in self.feature_weights.items()
+            if w > 0 and f in df.columns
+        ]
+        feat_weights_arr = (
+            np.array([self.feature_weights[f] for f in active_feats], dtype=float)
+            if active_feats else None
+        )
+
+        def _feat_vals(idx: int) -> Optional[np.ndarray]:
+            if not active_feats:
+                return None
+            return np.array(
+                [
+                    float(df.at[idx, f]) if not pd.isna(df.at[idx, f]) else np.nan
+                    for f in active_feats
+                ],
+                dtype=float,
+            )
+
         track_ids = pd.Series(np.int32(-1), index=df.index)
         next_track_id = 0
+        # active_tracks[tid] = {
+        #   "centroid": (c0, c1),
+        #   "last_frame": int,
+        #   "feat_vals": ndarray | None,
+        # }
+        active_tracks: dict = {}
 
-        # active_tracks[trackid] = {"centroid": (c0, c1), "last_frame": int}
-        # A track is eligible for linking while (curr_frame - last_frame) <= gap_bridge_frames.
-        active_tracks = {}
-
-        # Seed with first frame detections
+        # ── Seed first frame ──────────────────────────────────────────
         first_mask = df["frame"] == frames[0]
         first_indices = df.index[first_mask]
         for idx in first_indices:
-            c0 = df.at[idx, "centroid_0"]
-            c1 = df.at[idx, "centroid_1"]
+            c0, c1 = float(df.at[idx, "centroid_0"]), float(df.at[idx, "centroid_1"])
             track_ids[idx] = next_track_id
             active_tracks[next_track_id] = {
                 "centroid": (c0, c1),
                 "last_frame": frames[0],
+                "feat_vals": _feat_vals(idx),
             }
             next_track_id += 1
 
         total_linked = 0
         total_new = len(first_indices)
-        total_bridged = 0  # links that used a gap >= 2 frames
-        distances_all = []
+        total_bridged = 0
+        euclidean_dists: List[float] = []
         max_dist_used = 0.0
 
-        # Link subsequent frames
+        # ── Link subsequent frames ────────────────────────────────────
         for fi in range(1, len(frames)):
             curr_frame = frames[fi]
             curr_mask = df["frame"] == curr_frame
@@ -105,21 +168,19 @@ class HungarianTracker:
             if len(curr_indices) == 0:
                 continue
 
-            # Eligible tracks: last seen within gap_bridge_frames
             eligible_tids = [
                 tid for tid, info in active_tracks.items()
                 if (curr_frame - info["last_frame"]) <= self.gap_bridge_frames
             ]
 
-            if len(eligible_tids) == 0:
-                # All current detections become new tracks
+            if not eligible_tids:
                 for idx in curr_indices:
-                    c0 = df.at[idx, "centroid_0"]
-                    c1 = df.at[idx, "centroid_1"]
+                    c0, c1 = float(df.at[idx, "centroid_0"]), float(df.at[idx, "centroid_1"])
                     track_ids[idx] = next_track_id
                     active_tracks[next_track_id] = {
                         "centroid": (c0, c1),
                         "last_frame": curr_frame,
+                        "feat_vals": _feat_vals(idx),
                     }
                     next_track_id += 1
                 total_new += len(curr_indices)
@@ -132,16 +193,34 @@ class HungarianTracker:
                 curr_indices, ["centroid_0", "centroid_1"]
             ].values
 
-            cost = cdist(prev_centroids, curr_centroids, metric="euclidean")
+            euclid = cdist(prev_centroids, curr_centroids, metric="euclidean")
+
+            if active_feats:
+                _nan_fill = np.full(len(active_feats), np.nan)
+                prev_feats = np.array([
+                    active_tracks[tid]["feat_vals"]
+                    if active_tracks[tid]["feat_vals"] is not None
+                    else _nan_fill
+                    for tid in eligible_tids
+                ])
+                curr_feats = df.loc[curr_indices, active_feats].values.astype(float)
+                cost = self._build_cost_matrix(
+                    euclid, prev_feats, curr_feats, feat_weights_arr, self.max_distance
+                )
+            else:
+                cost = euclid
+
             row_ind, col_ind = linear_sum_assignment(cost)
 
-            linked_curr = set()
+            linked_curr: set = set()
             for r, c in zip(row_ind, col_ind):
                 if cost[r, c] <= self.max_distance:
                     tid = eligible_tids[r]
                     curr_idx = curr_indices[c]
-                    c0 = df.at[curr_idx, "centroid_0"]
-                    c1 = df.at[curr_idx, "centroid_1"]
+                    c0, c1 = (
+                        float(df.at[curr_idx, "centroid_0"]),
+                        float(df.at[curr_idx, "centroid_1"]),
+                    )
                     track_ids[curr_idx] = tid
                     gap = curr_frame - active_tracks[tid]["last_frame"]
                     if gap >= 2:
@@ -149,30 +228,32 @@ class HungarianTracker:
                     active_tracks[tid] = {
                         "centroid": (c0, c1),
                         "last_frame": curr_frame,
+                        "feat_vals": _feat_vals(curr_idx),
                     }
                     linked_curr.add(c)
                     total_linked += 1
-                    distances_all.append(cost[r, c])
-                    if cost[r, c] > max_dist_used:
-                        max_dist_used = cost[r, c]
+                    ed = float(euclid[r, c])
+                    euclidean_dists.append(ed)
+                    if ed > max_dist_used:
+                        max_dist_used = ed
 
             # Unmatched detections in current frame become new tracks
             for j, idx in enumerate(curr_indices):
                 if j not in linked_curr:
-                    c0 = df.at[idx, "centroid_0"]
-                    c1 = df.at[idx, "centroid_1"]
+                    c0, c1 = (
+                        float(df.at[idx, "centroid_0"]),
+                        float(df.at[idx, "centroid_1"]),
+                    )
                     track_ids[idx] = next_track_id
                     active_tracks[next_track_id] = {
                         "centroid": (c0, c1),
                         "last_frame": curr_frame,
+                        "feat_vals": _feat_vals(idx),
                     }
                     next_track_id += 1
                     total_new += 1
 
-            # Retire tracks that have been silent beyond the bridge window.
-            # This isn't strictly necessary for correctness (they just stay
-            # ineligible), but prevents the dict growing to millions of stale
-            # entries on long runs.
+            # Retire tracks silent beyond the bridge window
             cutoff = curr_frame - self.gap_bridge_frames
             active_tracks = {
                 tid: info for tid, info in active_tracks.items()
@@ -182,46 +263,53 @@ class HungarianTracker:
         df["trackid"] = track_ids.astype(np.int32)
 
         if logger:
-            n_tracks = df["trackid"].nunique()
+            n_tracks = int(df["trackid"].nunique())
             n_objects = len(df)
             n_frames = len(frames)
-
             track_lengths = df.groupby("trackid")["frame"].nunique()
-            full_length_tracks = (track_lengths == n_frames).sum()
-            short_tracks = (track_lengths == 1).sum()
-            median_length = track_lengths.median()
-
-            mean_dist = np.mean(distances_all) if distances_all else 0.0
-            p95_dist = np.percentile(distances_all, 95) if distances_all else 0.0
-
+            full_length_tracks = int((track_lengths == n_frames).sum())
+            short_tracks = int((track_lengths == 1).sum())
+            median_length = float(track_lengths.median())
+            mean_dist = float(np.mean(euclidean_dists)) if euclidean_dists else 0.0
+            p95_dist = float(np.percentile(euclidean_dists, 95)) if euclidean_dists else 0.0
+            feat_info = (
+                f"appearance features: {active_feats} "
+                f"(weights: {[self.feature_weights[f] for f in active_feats]})"
+                if active_feats
+                else "centroid-only (feature_weights empty)"
+            )
             logger.info(
-                f"Hungarian tracking v2 summary:\n"
+                f"Hungarian tracking summary:\n"
                 f"  Config: max_distance={self.max_distance}, "
-                f"gap_bridge_frames={self.gap_bridge_frames}\n"
+                f"gap_bridge_frames={self.gap_bridge_frames}, {feat_info}\n"
                 f"  Frames: {n_frames}, Detections: {n_objects}\n"
                 f"  Tracks: {n_tracks} total, {full_length_tracks} full-length "
                 f"({n_frames}f), {short_tracks} single-frame\n"
                 f"  Links: {total_linked} total, {total_bridged} via gap bridging "
                 f"({100.0 * total_bridged / max(total_linked, 1):.1f}%), "
                 f"{total_new} new tracks\n"
-                f"  Distances: mean={mean_dist:.1f}px, p95={p95_dist:.1f}px, "
-                f"max={max_dist_used:.1f}px (cutoff={self.max_distance}px)\n"
-                f"  Track length: median={median_length:.0f} frames"
+                f"  Centroid distances: mean={mean_dist:.1f}px, "
+                f"p95={p95_dist:.1f}px, max={max_dist_used:.1f}px "
+                f"(total-cost cutoff={self.max_distance}px)"
             )
 
         return df
+
+    # ------------------------------------------------------------------
+    # piPOS lock-in (unchanged from v1)
+    # ------------------------------------------------------------------
 
     def apply_pipos_lockin(
         self,
         measurements_df: pd.DataFrame,
         logger: Optional[logging.Logger] = None,
     ) -> pd.DataFrame:
-        """
-        Enforce piPOS lock-in: once a track is piPOS, all subsequent frames stay piPOS.
-
-        Unchanged from v1.
-        """
-        if "trackid" not in measurements_df.columns or "pi_class" not in measurements_df.columns:
+        """Enforce piPOS lock-in: once a track is piPOS, all subsequent
+        frames stay piPOS."""
+        if (
+            "trackid" not in measurements_df.columns
+            or "pi_class" not in measurements_df.columns
+        ):
             if logger:
                 logger.warning("piPOS lock-in skipped: missing trackid or pi_class column")
             return measurements_df
@@ -229,29 +317,27 @@ class HungarianTracker:
         override_count = 0
         tracks_with_lockin = 0
         tracked = measurements_df["trackid"] != -1
-        n_tracked_cells = tracked.sum()
-        n_untracked = (~tracked).sum()
-
-        pipos_before = (measurements_df["pi_class"] == "piPOS").sum()
+        n_tracked_cells = int(tracked.sum())
+        n_untracked = int((~tracked).sum())
+        pipos_before = int((measurements_df["pi_class"] == "piPOS").sum())
 
         for tid, group in measurements_df.loc[tracked].groupby("trackid"):
             pipos_frames = group.loc[group["pi_class"] == "piPOS", "frame"]
             if len(pipos_frames) == 0:
                 continue
-
             first_pipos_frame = pipos_frames.min()
             mask = (
                 (measurements_df["trackid"] == tid)
                 & (measurements_df["frame"] > first_pipos_frame)
                 & (measurements_df["pi_class"] != "piPOS")
             )
-            n_overrides = mask.sum()
+            n_overrides = int(mask.sum())
             if n_overrides > 0:
                 tracks_with_lockin += 1
                 override_count += n_overrides
             measurements_df.loc[mask, "pi_class"] = "piPOS"
 
-        pipos_after = (measurements_df["pi_class"] == "piPOS").sum()
+        pipos_after = int((measurements_df["pi_class"] == "piPOS").sum())
 
         if logger:
             logger.info(
@@ -264,3 +350,50 @@ class HungarianTracker:
             )
 
         return measurements_df
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_cost_matrix(
+        euclid: np.ndarray,
+        prev_feats: np.ndarray,
+        curr_feats: np.ndarray,
+        weights: np.ndarray,
+        max_distance: float,
+    ) -> np.ndarray:
+        """Add normalised appearance cost to an Euclidean distance matrix.
+
+        Appearance cost for feature f between track i and detection j:
+            |prev_f_i - curr_f_j| / max(|prev_f_i|, |curr_f_j|, ε)
+        This is scale-invariant and lies in [0, 1] for positive features.
+        The weighted sum is multiplied by ``max_distance`` to put it in the
+        same pixel units as the Euclidean component.
+
+        Example: area weight=0.3, max_distance=25 px.  A 3× area mismatch
+        (single-cell vs clump) has normalised diff ≈ 0.67, contributing
+        0.67 × 0.3 × 25 ≈ 5 px of virtual distance.
+
+        NaN feature values (missing / not observed yet) contribute 0 cost,
+        so missing features never block a valid spatial link.
+
+        Args:
+            euclid:       (n_prev, n_curr) Euclidean distance matrix.
+            prev_feats:   (n_prev, n_feats) last-known feature values per track.
+            curr_feats:   (n_curr, n_feats) feature values in current frame.
+            weights:      (n_feats,) per-feature weights.
+            max_distance: Pixel scale for appearance cost (= tracker threshold).
+
+        Returns:
+            (n_prev, n_curr) total cost matrix (Euclidean + appearance).
+        """
+        cost = euclid.copy()
+        p = prev_feats[:, np.newaxis, :]    # (n_prev, 1, n_feats)
+        c = curr_feats[np.newaxis, :, :]    # (1, n_curr, n_feats)
+        denom = np.maximum(np.maximum(np.abs(p), np.abs(c)), 1e-6)
+        norm_diff = np.abs(p - c) / denom   # (n_prev, n_curr, n_feats) ∈ [0, 1]
+        # nansum: NaN entries contribute 0, never block a link
+        appearance = np.nansum(norm_diff * weights, axis=2)  # (n_prev, n_curr)
+        cost += appearance * max_distance
+        return cost
