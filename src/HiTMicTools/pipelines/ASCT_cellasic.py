@@ -83,6 +83,7 @@ from HiTMicTools.img_processing.morphology_corrections import (
     apply_instSeg_morphology_corrections,
 )
 from HiTMicTools.tracking.track_events import (
+    refine_tracks,
     detect_division_events,
     detect_lysis_events,
     detect_filamentation_events,
@@ -618,7 +619,14 @@ class ASCT_cellasic(BasePipeline):
 
         # 4.8 Track event detection + FL trajectory (requires final pi_class)
         if self.tracking and self.cell_tracker is not None:
-            img_logger.info("4.8 - Detecting track events", show_memory=False)
+            img_logger.info("4.8 - Refining tracks + detecting events", show_memory=False)
+            fl_measurements, refine_counts = refine_tracks(fl_measurements)
+            img_logger.info(
+                f"4.8 - Track refinement: "
+                f"{refine_counts['short_tracks']} short tracks, "
+                f"{refine_counts['bad_frame_rows']} bad frames, "
+                f"{refine_counts['class_flicker_rows']} class flicker rows"
+            )
             fl_measurements, div_counts = detect_division_events(fl_measurements)
             fl_measurements, lys_counts = detect_lysis_events(fl_measurements)
             fl_measurements, fil_counts = detect_filamentation_events(fl_measurements)
