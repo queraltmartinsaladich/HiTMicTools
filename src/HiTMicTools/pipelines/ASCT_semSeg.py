@@ -92,6 +92,8 @@ class ASCT_semSeg(BasePipeline):
         name: str,
         export_labeled_mask: bool = True,
         export_aligned_image: bool = True,
+        export_training_crops: bool = False,
+        training_crop_size: int = 64,
     ) -> None:
         """Pipeline analysis for each image."""
 
@@ -555,6 +557,23 @@ class ASCT_semSeg(BasePipeline):
                 np.uint8,
             )
             tifffile.imwrite(export_path + "_transformed.tiff", image_8bit, imagej=True)
+
+        if export_training_crops:
+            from HiTMicTools.data_analysis.training_data_export import TrainingDataExporter
+            exporter = TrainingDataExporter(crop_size=training_crop_size)
+            crop_counts = exporter.export(
+                fl_measurements=fl_measurements,
+                image=img_analyser.get("image", to_numpy=True),
+                labeled_mask=img_analyser.get("labels", index=(slice(None), 0, 0), to_numpy=True),
+                output_path=export_path + "_crops",
+                species=getattr(self, "species", None),
+            )
+            img_logger.info(
+                "5 - Training crops: {} exported — {}".format(
+                    crop_counts["total"],
+                    ", ".join(f"{cls}={n}" for cls, n in sorted(crop_counts["per_class"].items()))
+                )
+            )
 
         img_logger.info(f"Analysis completed for {movie_name}", show_memory=True)
         del prob_map, img, fl_measurements, d_summary, img_analyser
