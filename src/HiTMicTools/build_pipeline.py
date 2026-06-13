@@ -112,18 +112,27 @@ def build_and_run_pipeline(config_file: str, worklist: str = None):
     else:
         print("Tracking disabled")
 
+    export_labeled_mask = configs.input_data["export_labelled_masks"]
+    export_aligned_image = configs.input_data.get("export_aligned_image", False)
+    export_training_crops = configs.input_data.get("export_training_crops", False)
+    training_crop_size = configs.input_data.get("training_crop_size", 64)
+
     if configs.pipeline_setup["parallel_processing"]:
         analysis_wf.process_folder_parallel(
             files_pattern=configs.input_data["file_pattern"],
-            export_labeled_mask=configs.input_data["export_labelled_masks"],
-            export_aligned_image=configs.input_data["export_labelled_masks"],
+            export_labeled_mask=export_labeled_mask,
+            export_aligned_image=export_aligned_image,
             num_workers=num_workers,
+            export_training_crops=export_training_crops,
+            training_crop_size=training_crop_size,
             **extra_args,
         )
     else:
         analysis_wf.process_folder(
             files_pattern=configs.input_data["file_pattern"],
-            export_labeled_mask=configs.input_data["export_labelled_masks"],
-            export_aligned_image=configs.input_data["export_labelled_masks"],
+            export_labeled_mask=export_labeled_mask,
+            export_aligned_image=export_aligned_image,
+            export_training_crops=export_training_crops,
+            training_crop_size=training_crop_size,
             **extra_args,
         )

@@ -1,0 +1,47 @@
+# HiTMicTools — ASCT_instSeg pipeline config template
+# Instance segmentation pipeline (RF-DETR-based, open-well plates)
+#
+# Usage:
+#   hitmic --config instSeg_template.yml
+#   hitmic --config instSeg_template.yml --worklist /path/to/worklist.txt
+
+# ── Input / output ─────────────────────────────────────────────────────────────
+input_data:
+  input_folder: /path/to/input          # folder containing .nd2 or .tif files
+  output_folder: /path/to/output
+  file_type: nd2                         # nd2 | tif | czi
+  file_pattern: null                     # glob pattern; null = all files of file_type
+  export_labelled_masks: true            # save labelled mask TIFFs
+  export_aligned_image: false            # save drift-corrected image stack
+  export_training_crops: false           # save per-cell crop NPZ for retraining
+  training_crop_size: 64                 # side length in pixels
+
+# ── Pipeline setup ─────────────────────────────────────────────────────────────
+pipeline_setup:
+  name: ASCT_instSeg
+  reference_channel: 0                  # BF channel index
+  pi_channel: 1                         # FL/PI channel index
+  align_frames: true
+  method: rolling_ball                  # background correction: rolling_ball | subtract_mean
+  focus_correction: true
+  parallel_processing: false            # true only for multi-GPU local runs; use SLURM arrays on sciCORE
+  num_workers: 1
+  tracking: true
+  compile_models: false                 # false | "default" | "reduce-overhead" | "max-autotune"
+  species: ecoli                        # ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera | s_aureus
+
+# ── Models ─────────────────────────────────────────────────────────────────────
+models:
+  model_collection: /path/to/model_bundle.zip   # ZIP bundle containing all models + btrack config
+
+# ── Tracking (only used when tracking: true and no model_collection) ───────────
+# tracking:
+#   backend: hungarian                  # hungarian | btrack
+#   parameters:
+#     max_distance: 25.0
+#     max_lost: 3
+
+# ── Extra kwargs forwarded to analyse_image ────────────────────────────────────
+# Any key here is passed as **kwargs to analyse_image.
+# extra:
+#   some_flag: true

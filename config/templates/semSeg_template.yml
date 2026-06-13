@@ -1,0 +1,46 @@
+# HiTMicTools — ASCT_semSeg pipeline config template
+# Semantic segmentation pipeline (MONAI UNet + FlexResNet classifier)
+#
+# Usage:
+#   hitmic --config semSeg_template.yml
+#   hitmic --config semSeg_template.yml --worklist /path/to/worklist.txt
+
+# ── Input / output ─────────────────────────────────────────────────────────────
+input_data:
+  input_folder: /path/to/input
+  output_folder: /path/to/output
+  file_type: nd2                         # nd2 | tif | czi
+  file_pattern: null
+  export_labelled_masks: true
+  export_aligned_image: false
+  export_training_crops: false
+  training_crop_size: 64
+
+# ── Pipeline setup ─────────────────────────────────────────────────────────────
+pipeline_setup:
+  name: ASCT_semSeg
+  reference_channel: 0
+  pi_channel: 1
+  align_frames: true
+  method: rolling_ball
+  focus_correction: true
+  parallel_processing: false
+  num_workers: 1
+  tracking: true
+  compile_models: false
+  species: ecoli                         # ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera | s_aureus
+
+# ── Models ─────────────────────────────────────────────────────────────────────
+models:
+  model_collection: /path/to/model_bundle.zip
+
+# ── Tracking (only used when tracking: true and no model_collection) ───────────
+# tracking:
+#   backend: hungarian
+#   parameters:
+#     max_distance: 25.0
+#     max_lost: 3
+
+# ── Extra kwargs ───────────────────────────────────────────────────────────────
+# extra:
+#   some_flag: true

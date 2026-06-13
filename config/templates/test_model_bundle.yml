@@ -1,0 +1,33 @@
+# HiTMicTools — CI/test config for pipeline loading smoke test
+# Used by tests/tests_workflows.py — does NOT need real data or real model files.
+
+input_data:
+  input_folder: /tmp/hitmic_test_input
+  output_folder: /tmp/hitmic_test_output
+  file_type: tif
+  file_pattern: null
+  export_labelled_masks: false
+  export_aligned_image: false
+  export_training_crops: false
+  training_crop_size: 64
+
+pipeline_setup:
+  name: ASCT_instSeg
+  reference_channel: 0
+  pi_channel: 1
+  align_frames: false
+  method: rolling_ball
+  focus_correction: false
+  parallel_processing: false
+  num_workers: 1
+  tracking: true
+  compile_models: false
+
+models:
+  model_collection: /path/to/model_bundle.zip   # replace with real path for integration tests
+
+tracking:
+  backend: hungarian
+  parameters:
+    max_distance: 25.0
+    max_lost: 3
