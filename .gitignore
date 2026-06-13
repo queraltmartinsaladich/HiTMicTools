@@ -30,3 +30,6 @@ htmlcov/
 
 # Logs and temp output
 *.log
+
+# Filled-in pipeline configs (copies of templates with real paths — never commit these)
+configs/runs/

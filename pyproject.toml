@@ -43,16 +43,16 @@ dependencies = [
     "gradient-free-optimizers==1.7.2",
     "jax==0.4.23",
     "jaxlib==0.4.23",
-    "basicpy @ git+https://github.com/phisanti/BaSiCPy_scm.git@c1eb6283508ac31f0206069e497bb13b11d0b4b6",
-    "jetraw-tools @ git+https://github.com/phisanti/jetraw_tools.git@9ebbae2908dbba72074ccc024a7962be744df30f",
+    "basicpy @ git+https://github.com/BoeckLab/BaSiCPy_scm.git@c1eb6283508ac31f0206069e497bb13b11d0b4b6",
+    "jetraw-tools @ git+https://github.com/BoeckLab/jetraw_tools.git@9ebbae2908dbba72074ccc024a7962be744df30f",
     "onnxruntime>=1.19,<1.20",
     "skl2onnx>=1.19,<1.20",
     "btrack>=0.7,<0.8",
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/phisanti/HiTMicTools"
-"Bug Tracker" = "https://github.com/phisanti/HiTMicTools/issues"
+"Homepage" = "https://github.com/queraltmartinsaladich/HiTMicTools"
+"Bug Tracker" = "https://github.com/queraltmartinsaladich/HiTMicTools/issues"
 
 [project.scripts]
 hitmictools = "HiTMicTools.main:main"
@@ -71,7 +71,7 @@ where = ["src"]
 
 [project.optional-dependencies]
 bacdetr = [
-    "bacdetr @ git+https://github.com/phisanti/BacDETRSegm.git@develop#subdirectory=bacdetr",
+    "bacdetr @ git+https://github.com/BoeckLab/BacDETRSegm.git@develop#subdirectory=bacdetr",
 ]
 rfdetr = [
     "rfdetr>=1.3,<1.4",
