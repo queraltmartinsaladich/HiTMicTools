@@ -394,7 +394,7 @@ class ASCT_semSeg(BasePipeline):
         # 4.4 Morphology-based label corrections
         img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
         fl_measurements, morph_counts = apply_semSeg_morphology_corrections(
-            fl_measurements, img_analyser.labeled_mask
+            fl_measurements
         )
         img_logger.info(
             f"4.4 - Morphology corrections: "

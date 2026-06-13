@@ -579,7 +579,7 @@ class ASCT_cellasic(BasePipeline):
         # 4.4 Morphology-based label corrections
         img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
         fl_measurements, morph_counts = apply_instSeg_morphology_corrections(
-            fl_measurements, img_analyser.labeled_mask,
+            fl_measurements,
             **self._get_morphology_kwargs()
         )
         img_logger.info(

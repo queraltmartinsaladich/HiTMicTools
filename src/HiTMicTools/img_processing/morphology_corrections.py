@@ -31,36 +31,16 @@ shaped detections (wrong size/shape for both rules) remain as debris.
         purely geometric from the labeled mask.
 """
 import warnings
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
-from skimage.morphology import skeletonize
-from scipy.ndimage import convolve as nd_convolve
 from scipy.spatial.distance import cdist
-
-
-# 3×3 kernel counting the 8-connected neighbours of each skeleton pixel
-_BRANCH_KERNEL = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int32)
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-def _branch_point_count(binary_mask: np.ndarray) -> int:
-    """Count skeleton branch points in a 2-D binary mask."""
-    if binary_mask.sum() < 5:
-        return 0
-    skel = skeletonize(binary_mask)
-    if not skel.any():
-        return 0
-    neighbors = nd_convolve(
-        skel.astype(np.int32), _BRANCH_KERNEL, mode="constant", cval=0
-    )
-    # A branch point has ≥ 3 skeleton neighbours
-    return int((skel & (neighbors >= 3)).sum())
-
 
 def _add_aspect_ratio(fl_measurements: pd.DataFrame) -> pd.DataFrame:
     """Add aspect_ratio = major_axis_length / minor_axis_length (clipped)."""
@@ -70,43 +50,12 @@ def _add_aspect_ratio(fl_measurements: pd.DataFrame) -> pd.DataFrame:
     return fl
 
 
-def _add_skeleton_features(
-    fl_measurements: pd.DataFrame,
-    labeled_mask: np.ndarray,
-) -> pd.DataFrame:
-    """Add skeleton_branch_points column.
-
-    Iterates over frames for efficiency; within each frame iterates over
-    ROI labels and computes the branch-point count from the binary mask.
-    Requires only the labeled mask — no intensity image.
-
-    Args:
-        fl_measurements: DataFrame with 'frame' and 'label' columns.
-        labeled_mask: Shape (T, S, C, X, Y) — the TSCXY mask array.
-    """
-    lm_work = labeled_mask[:, 0, 0, :, :] if labeled_mask.ndim == 5 else labeled_mask
-
-    bp_series = pd.Series(0, index=fl_measurements.index, dtype=np.int32)
-
-    for frame_idx, frame_group in fl_measurements.groupby("frame"):
-        lm_frame = lm_work[int(frame_idx)]
-        for row_idx, row in frame_group.iterrows():
-            bp_series.at[row_idx] = _branch_point_count(
-                lm_frame == int(row["label"])
-            )
-
-    fl = fl_measurements.copy()
-    fl["skeleton_branch_points"] = bp_series
-    return fl
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def apply_instSeg_morphology_corrections(
     fl_measurements: pd.DataFrame,
-    labeled_mask: Optional[np.ndarray] = None,
     spaghetti_ar: float = 5.0,
     spaghetti_solidity: float = 0.72,
     lysis_solidity: float = 0.45,
@@ -116,16 +65,15 @@ def apply_instSeg_morphology_corrections(
 ) -> Tuple[pd.DataFrame, Dict[str, int]]:
     """Rule-based morphology corrections for instSeg / cellasic pipelines.
 
-    Adds two derived feature columns to the returned DataFrame:
-        aspect_ratio            = major_axis_length / minor_axis_length
-        skeleton_branch_points  = number of skeleton branch points in the ROI mask
-
-    These columns are kept for downstream analysis (morphology feature step).
+    Adds aspect_ratio (major_axis_length / minor_axis_length) to the returned
+    DataFrame.  Requires skeleton_branch_points to be pre-computed by
+    roi_skeleton_features in extra_properties (step 4.2) — raises ValueError
+    if the column is absent.
 
     Args:
         fl_measurements: DataFrame containing at minimum object_class, area,
-            major_axis_length, minor_axis_length, solidity, frame, label.
-        labeled_mask: (T, S, C, X, Y) integer mask array from img_analyser.
+            major_axis_length, minor_axis_length, solidity, frame, label,
+            skeleton_branch_points.
         spaghetti_ar: Aspect-ratio threshold for R1.  Default 5.0.
         spaghetti_solidity: Solidity ceiling for R1.  Default 0.72.
         lysis_solidity: Solidity ceiling for R2.  Default 0.45.
@@ -196,7 +144,6 @@ def apply_instSeg_morphology_corrections(
 
 def apply_semSeg_morphology_corrections(
     fl_measurements: pd.DataFrame,
-    labeled_mask: Optional[np.ndarray] = None,
     area_clump_frac: float = 2.5,
     clump_solidity_max: float = 0.78,
     division_dist_frac: float = 1.0,
@@ -222,14 +169,15 @@ def apply_semSeg_morphology_corrections(
          Both ROIs are flagged as joint-cell.  Skipped when
          enable_division_detection=False (e.g., singleFrame pipeline).
 
-    Adds aspect_ratio and skeleton_branch_points columns to the returned
-    DataFrame for downstream morphology feature extraction.
+    Adds aspect_ratio (major_axis_length / minor_axis_length) to the returned
+    DataFrame.  Requires skeleton_branch_points to be pre-computed by
+    roi_skeleton_features in extra_properties (step 4.2) — raises ValueError
+    if the column is absent.
 
     Args:
         fl_measurements: DataFrame with object_class, area, major_axis_length,
             minor_axis_length, solidity, orientation, centroid-0, centroid-1,
-            frame, label columns.
-        labeled_mask: (T, S, C, X, Y) integer mask array from img_analyser.
+            frame, label, skeleton_branch_points columns.
         area_clump_frac: Area threshold multiplier for R1.  Default 2.5.
         clump_solidity_max: Solidity ceiling for R1.  Default 0.78.
         division_dist_frac: Centroid distance threshold (× median major axis)
