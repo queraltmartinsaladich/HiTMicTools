@@ -1,7 +1,9 @@
 from typing import Any, List, Tuple, Union, Optional, Dict
 import numpy as np
+from scipy.ndimage import distance_transform_edt
 from skimage.filters import threshold_otsu
-from skimage.measure import label as skimage_label
+from skimage.measure import label as skimage_label, regionprops
+from skimage.segmentation import watershed
 
 
 def map_predictions_to_labels(
@@ -184,3 +186,99 @@ def apply_fl_union_mask(
             n_added += 1
 
     return n_added, ghost_records
+
+
+def refine_masks_temporal(
+    labeled_mask: np.ndarray,
+    gradient_map: Optional[np.ndarray] = None,
+    min_seed_overlap: float = 0.3,
+) -> int:
+    """Split merged instances using previous-frame centroids as watershed seeds.
+
+    For each frame t > 0, any region that contains two or more centroids from
+    the previous frame (with sufficient area overlap) is re-split via watershed.
+    This corrects the common failure mode where two touching cells are merged
+    into a single label in one frame while they were separate in the frame before.
+
+    The labeled_mask is modified in-place.  Frame 0 is always unchanged.
+    Refinements propagate forward: the corrected mask for frame t is used as the
+    prior for frame t+1.
+
+    Args:
+        labeled_mask: Shape (T, S, C, H, W) int array — only the view
+            [:, 0, 0, :, :] (T, H, W) is read and written, matching the
+            convention used by apply_fl_union_mask.
+        gradient_map: Shape (T, H, W) float where HIGH values mark boundaries
+            (e.g. 1 - prob_map[:, 0] for a UNet foreground probability map).
+            If None, a distance-transform of each candidate region is used as
+            the fallback elevation for watershed.
+        min_seed_overlap: Fraction of a t-1 cell's pixel area that must overlap
+            with the candidate t region for that centroid to count as a seed.
+            Filters out centroids from cells that moved out of the region.
+            Default 0.3.
+
+    Returns:
+        Total number of regions split across all frames.
+    """
+    lm = labeled_mask[:, 0, 0, :, :]  # view — writes propagate to labeled_mask
+    T, H, W = lm.shape
+    n_splits = 0
+
+    for t in range(1, T):
+        prev = lm[t - 1]
+        curr = lm[t].copy()
+
+        props_prev = regionprops(prev)
+        if not props_prev:
+            continue
+
+        prev_info: Dict[int, Tuple[int, Tuple[int, int]]] = {
+            p.label: (p.area, (int(round(p.centroid[0])), int(round(p.centroid[1]))))
+            for p in props_prev
+        }
+
+        to_split: Dict[int, List[Tuple[int, int]]] = {}
+        for curr_label in np.unique(curr):
+            if curr_label == 0:
+                continue
+            region = curr == curr_label
+            seeds: List[Tuple[int, int]] = []
+            for prev_label, (prev_area, (cy, cx)) in prev_info.items():
+                if cy >= H or cx >= W:
+                    continue
+                if not region[cy, cx]:
+                    continue
+                overlap_frac = float(np.sum(region & (prev == prev_label))) / prev_area
+                if overlap_frac >= min_seed_overlap:
+                    seeds.append((cy, cx))
+            if len(seeds) >= 2:
+                to_split[curr_label] = seeds
+
+        if not to_split:
+            continue
+
+        next_label = int(curr.max()) + 1
+        for curr_label, seeds in to_split.items():
+            region_mask = curr == curr_label
+
+            if gradient_map is not None:
+                elev = gradient_map[t]
+            else:
+                dist = distance_transform_edt(region_mask)
+                elev = np.where(region_mask, -dist, 0.0)
+
+            markers = np.zeros((H, W), dtype=np.int32)
+            for i, (cy, cx) in enumerate(seeds, start=1):
+                markers[cy, cx] = i
+
+            ws = watershed(elev, markers, mask=region_mask)
+
+            curr[ws == 1] = curr_label
+            for i in range(2, len(seeds) + 1):
+                curr[ws == i] = next_label
+                next_label += 1
+            n_splits += 1
+
+        lm[t] = curr
+
+    return n_splits

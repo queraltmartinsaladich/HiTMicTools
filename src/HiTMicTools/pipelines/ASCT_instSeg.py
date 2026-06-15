@@ -19,6 +19,7 @@ from HiTMicTools.img_processing.img_ops import measure_background_intensity
 from HiTMicTools.img_processing.mask_ops import (
     map_predictions_to_labels_by_frame,
     apply_fl_union_mask,
+    refine_masks_temporal,
 )
 from HiTMicTools.img_processing.morphology_corrections import (
     apply_instSeg_morphology_corrections,
@@ -274,6 +275,13 @@ class ASCT_instSeg(BasePipeline):
         else:
             img_logger.info("3.3 - FL union mask: no ghost cells detected")
         del fl_norm
+
+        # 3.4 Temporal mask refinement — split merged instances using previous-frame centroids
+        if getattr(self, "tracking", False):
+            n_splits = refine_masks_temporal(img_analyser.labeled_mask)
+            if n_splits:
+                img_analyser.total_rois = int(img_analyser.labeled_mask.max())
+                img_logger.info(f"3.4 - Temporal refinement: {n_splits} region(s) split")
 
         # Build a reference table that maps (frame, label) → class name + score.
         # ScSegmenter guarantees consecutive labels 1..N per frame after NMS/relabeling,
