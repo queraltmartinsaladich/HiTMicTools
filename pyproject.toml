@@ -47,7 +47,6 @@ dependencies = [
     "jetraw-tools @ git+https://github.com/BoeckLab/jetraw_tools.git@9ebbae2908dbba72074ccc024a7962be744df30f",
     "onnxruntime>=1.19,<1.20",
     "skl2onnx>=1.19,<1.20",
-    "btrack>=0.7,<0.8",
 ]
 
 [project.urls]
@@ -72,6 +71,9 @@ where = ["src"]
 [project.optional-dependencies]
 bacdetr = [
     "bacdetr @ git+https://github.com/BoeckLab/BacDETRSegm.git@develop#subdirectory=bacdetr",
+]
+btrack = [
+    "btrack>=0.7,<0.8",
 ]
 rfdetr = [
     "rfdetr>=1.3,<1.4",

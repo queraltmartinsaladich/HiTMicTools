@@ -35,8 +35,10 @@ fi
 # Install PyTorch with CUDA — pick the wheel matching the loaded CUDA version
 conda run -p "${ENV_DIR}" pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# Install the package and its dependencies
-conda run -p "${ENV_DIR}" pip install -e "${REPO_ROOT}[all]"
+# Install the package and its dependencies.
+# Use [bacdetr,btrack] for semSeg pipelines (btrack requires C++ compilation).
+# Use [bacdetr] alone for instSeg/cellasic (no btrack needed, faster install).
+conda run -p "${ENV_DIR}" pip install -e "${REPO_ROOT}[bacdetr,btrack]"
 
 echo "==> Done. Activate with: conda activate ${ENV_DIR}"
 echo "==> Test GPU visibility: conda run -p ${ENV_DIR} python -c \"import torch; print(torch.cuda.device_count(), 'GPU(s)')\""
