@@ -95,6 +95,8 @@ class HungarianTracker:
         volume_bounds: Optional[Tuple[int, int]] = None,
         logger: Optional[logging.Logger] = None,
         pixel_size: Optional[float] = None,
+        cost_overrides: Optional[Dict[int, Tuple[np.ndarray, List[int], List[int]]]] = None,
+        learned_max_cost: float = 0.5,
     ) -> pd.DataFrame:
         """Assign persistent track IDs across frames.
 
@@ -120,6 +122,7 @@ class HungarianTracker:
 
         df = measurements_df.copy()
         frames = sorted(df["frame"].unique())
+        has_label_col = "label" in df.columns
 
         if len(frames) == 0:
             df["trackid"] = np.int32(-1)
@@ -163,6 +166,7 @@ class HungarianTracker:
                 "centroid": (c0, c1),
                 "last_frame": frames[0],
                 "feat_vals": _feat_vals(idx),
+                "label": int(df.at[idx, "label"]) if has_label_col else None,
             }
             next_track_id += 1
 
@@ -194,6 +198,7 @@ class HungarianTracker:
                         "centroid": (c0, c1),
                         "last_frame": curr_frame,
                         "feat_vals": _feat_vals(idx),
+                        "label": int(df.at[idx, "label"]) if has_label_col else None,
                     }
                     next_track_id += 1
                 total_new += len(curr_indices)
@@ -208,7 +213,31 @@ class HungarianTracker:
 
             euclid = cdist(prev_centroids, curr_centroids, metric="euclidean")
 
-            if active_feats:
+            if cost_overrides is not None and frames[fi - 1] in cost_overrides:
+                ov_matrix, ov_labels_t, ov_labels_t1 = cost_overrides[frames[fi - 1]]
+                row_map = {lbl: i for i, lbl in enumerate(ov_labels_t)}
+                col_map = {lbl: j for j, lbl in enumerate(ov_labels_t1)}
+                scale = effective_max_dist / max(learned_max_cost, 1e-8)
+                reject = effective_max_dist * 1e6
+                curr_labels = [
+                    int(df.at[idx, "label"]) if has_label_col else None
+                    for idx in curr_indices
+                ]
+                cost = euclid.copy()
+                for i, tid in enumerate(eligible_tids):
+                    if active_tracks[tid]["last_frame"] != frames[fi - 1]:
+                        continue  # gap-bridged: keep Euclidean fallback
+                    label_i = active_tracks[tid].get("label")
+                    if label_i is None or label_i not in row_map:
+                        continue
+                    ri = row_map[label_i]
+                    for j, label_j in enumerate(curr_labels):
+                        if label_j is None or label_j not in col_map:
+                            continue
+                        cj = col_map[label_j]
+                        raw = float(ov_matrix[ri, cj])
+                        cost[i, j] = raw * scale if raw < learned_max_cost else reject
+            elif active_feats:
                 _nan_fill = np.full(len(active_feats), np.nan)
                 prev_feats = np.array([
                     active_tracks[tid]["feat_vals"]
@@ -242,6 +271,7 @@ class HungarianTracker:
                         "centroid": (c0, c1),
                         "last_frame": curr_frame,
                         "feat_vals": _feat_vals(curr_idx),
+                        "label": int(df.at[curr_idx, "label"]) if has_label_col else None,
                     }
                     linked_curr.add(c)
                     total_linked += 1
@@ -262,6 +292,7 @@ class HungarianTracker:
                         "centroid": (c0, c1),
                         "last_frame": curr_frame,
                         "feat_vals": _feat_vals(idx),
+                        "label": int(df.at[idx, "label"]) if has_label_col else None,
                     }
                     next_track_id += 1
                     total_new += 1

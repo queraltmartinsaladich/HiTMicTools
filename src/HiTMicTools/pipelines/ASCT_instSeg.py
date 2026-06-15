@@ -456,10 +456,30 @@ class ASCT_instSeg(BasePipeline):
             img_logger.info("4.5 - Running object tracking")
             track_features = ["area", "major_axis_length", "minor_axis_length", "solidity", "orientation"]
             self.cell_tracker.set_features(track_features)
+
+            cost_overrides = None
+            if getattr(self, "assignment_scorer", None) is not None:
+                from HiTMicTools.tracking.feature_extraction import compute_movie_stats
+                _masks_for_scorer = img_analyser.labeled_mask[:, 0, 0, :, :]
+                _stats = compute_movie_stats(_masks_for_scorer)
+                _sorted_frames = sorted(fl_measurements["frame"].unique())
+                cost_overrides = {}
+                for _fi, _fval in enumerate(_sorted_frames[:-1]):
+                    _fval_next = _sorted_frames[_fi + 1]
+                    _cm, _lt, _lt1 = self.assignment_scorer.predict_cost_matrix(
+                        _masks_for_scorer[_fval],
+                        _masks_for_scorer[_fval_next],
+                        _stats,
+                        masks_t_prev=_masks_for_scorer[_fval - 1] if _fval > 0 else None,
+                    )
+                    cost_overrides[_fval] = (_cm, _lt, _lt1)
+                img_logger.info(f"4.5 - Learned cost overrides computed for {len(cost_overrides)} frame pairs")
+
             try:
                 fl_measurements = self.cell_tracker.track_objects(
                     fl_measurements, volume_bounds=(size_x, size_y),
                     logger=img_logger, pixel_size=pixel_size,
+                    cost_overrides=cost_overrides,
                 )
                 img_logger.info("4.5 - Object tracking completed successfully")
             except Exception as e:
