@@ -32,7 +32,7 @@ pipeline_setup:
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 models:
-  model_collection: /path/to/model_bundle.zip   # ZIP bundle containing all models + btrack config
+  model_collection: /scicore/home/boeluc00/martin0088/models/model_collection_instSeg.zip
 
 # ── Tracking (only used when tracking: true and no model_collection) ───────────
 # tracking:
