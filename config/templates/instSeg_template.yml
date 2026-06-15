@@ -22,7 +22,7 @@ pipeline_setup:
   reference_channel: 0                  # BF channel index
   pi_channel: 1                         # FL/PI channel index
   align_frames: true
-  method: rolling_ball                  # background correction: rolling_ball | subtract_mean
+  method: basicpy_fl                  # background correction: rolling_ball | subtract_mean
   focus_correction: true
   parallel_processing: false            # true only for multi-GPU local runs; use SLURM arrays on sciCORE
   num_workers: 1
@@ -39,7 +39,7 @@ tracking:
   backend: hungarian
   parameters:
     max_distance: 25.0
-    max_lost: 3
+    gap_bridge_frames: 3
 
 # ── Extra kwargs forwarded to analyse_image ────────────────────────────────────
 # Any key here is passed as **kwargs to analyse_image.

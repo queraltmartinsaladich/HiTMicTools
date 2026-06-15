@@ -22,7 +22,7 @@ pipeline_setup:
   reference_channel: 0
   pi_channel: 1
   align_frames: true
-  method: rolling_ball
+  method: basicpy_fl
   focus_correction: true
   parallel_processing: false
   num_workers: 1

@@ -30,7 +30,7 @@ def build_and_run_pipeline(config_file: str, worklist: str = None):
         worklist = None
 
     extra_args = configs.get("extra", {})
-    num_workers = configs.pipeline_setup.get("num_workers", {})
+    num_workers = configs.pipeline_setup.get("num_workers", None)
 
     # Get pipeline class from registry
     pipeline_name = configs.pipeline_setup["name"]

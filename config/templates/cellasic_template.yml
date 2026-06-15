@@ -22,7 +22,7 @@ pipeline_setup:
   reference_channel: 0
   pi_channel: 1
   align_frames: true
-  method: rolling_ball
+  method: basicpy_fl
   focus_correction: true
   parallel_processing: false
   num_workers: 1
@@ -39,7 +39,7 @@ tracking:
   backend: hungarian
   parameters:
     max_distance: 25.0
-    max_lost: 3
+    gap_bridge_frames: 3
 
 # ── Extra kwargs ───────────────────────────────────────────────────────────────
 # extra:

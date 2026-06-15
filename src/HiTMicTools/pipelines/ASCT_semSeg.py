@@ -259,6 +259,7 @@ class ASCT_semSeg(BasePipeline):
         img_logger.info("3.2 - Extracting ROIs", show_memory=True)
         img_analyser = RoiAnalyser(ip.img, prob_map, stack_order=("TSCXY", "TCXY"))
         fl_norm = ip.fl_norm  # capture before del — used by union mask below
+        frame_shifts = getattr(ip, "frame_shifts", None)  # capture before del
 
         # Remove image-processor to release space
         del ip
@@ -389,17 +390,17 @@ class ASCT_semSeg(BasePipeline):
             fl_measurements["background"], axis=0
         )
 
-        if align_frames and hasattr(ip, "frame_shifts"):
+        if align_frames and frame_shifts is not None:
             drift_df = pd.DataFrame({
-                "frame": np.arange(ip.frame_shifts.shape[0]),
-                "drift_dx": ip.frame_shifts[:, 0],
-                "drift_dy": ip.frame_shifts[:, 1],
+                "frame": np.arange(frame_shifts.shape[0]),
+                "drift_dx": frame_shifts[:, 0],
+                "drift_dy": frame_shifts[:, 1],
             })
             fl_measurements = fl_measurements.merge(drift_df, on="frame", how="left")
             img_logger.info(
                 f"4.3 - Alignment drift: "
-                f"dx=[{ip.frame_shifts[:, 0].min():.1f}, {ip.frame_shifts[:, 0].max():.1f}] px  "
-                f"dy=[{ip.frame_shifts[:, 1].min():.1f}, {ip.frame_shifts[:, 1].max():.1f}] px"
+                f"dx=[{frame_shifts[:, 0].min():.1f}, {frame_shifts[:, 0].max():.1f}] px  "
+                f"dy=[{frame_shifts[:, 1].min():.1f}, {frame_shifts[:, 1].max():.1f}] px"
             )
 
         # 4.4 Morphology-based label corrections
@@ -445,6 +446,17 @@ class ASCT_semSeg(BasePipeline):
                 )
                 fl_measurements.loc[non_ghost, "pi_class"] = predictions
             fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
+
+            # 4.6b piPOS lock-in (if tracker supports it)
+            if (
+                self.tracking
+                and self.cell_tracker is not None
+                and hasattr(self.cell_tracker, "apply_pipos_lockin")
+            ):
+                img_logger.info("4.6b - Applying piPOS lock-in")
+                fl_measurements = self.cell_tracker.apply_pipos_lockin(
+                    fl_measurements, logger=img_logger
+                )
 
             # Generate summary data using the dedicated method
             d_summary = self.generate_data_summary(
