@@ -109,6 +109,10 @@ def build_and_run_pipeline(config_file: str, worklist: str = None):
         else:
             print(f"Error: Unknown tracker backend: {tracker_backend}")
             sys.exit(1)
+
+        # Optionally load learned cost / division models (backwards-compatible)
+        analysis_wf.load_learned_trackers(tracking_config)
+
     else:
         print("Tracking disabled")
 

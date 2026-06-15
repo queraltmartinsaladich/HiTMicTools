@@ -206,6 +206,15 @@ class BasePipeline(ABC):
         self.output_path = output_path
         self.file_type = file_type
 
+        # Model attributes — initialised to None so pipelines can safely check
+        # `if self.x is not None` without calling load_model_bundle first.
+        self.pi_classifier = None
+        self.cell_tracker = None
+        self.bf_focus_restorer = None
+        self.fl_focus_restorer = None
+        self.assignment_scorer = None
+        self.division_classifier = None
+
     def setup_logger(
         self,
         output_path: str,
@@ -506,6 +515,17 @@ class BasePipeline(ABC):
             tracker_backend: Tracker backend - "btrack" or "hungarian"
             tracker_config: Backend-specific parameters (hungarian only)
         """
+        if tracker_backend == "btrack" and config_path and config_path.endswith(".zip"):
+            with zipfile.ZipFile(config_path, "r") as _z:
+                if "config_tracker.yml" not in _z.namelist():
+                    yml_files = [n for n in _z.namelist() if n.endswith(".yml")]
+                    raise FileNotFoundError(
+                        f"backend: btrack requires config_tracker.yml in the bundle ZIP, "
+                        f"but it was not found in {config_path}. "
+                        f"Found YML files: {yml_files}. "
+                        f"Use model_collection_semSegTrack.zip (not model_collection_semSeg.zip)."
+                    )
+
         if tracker_backend == "hungarian":
             from HiTMicTools.tracking.hungarian_tracker import HungarianTracker
 
@@ -541,6 +561,38 @@ class BasePipeline(ABC):
 
         else:
             raise ValueError(f"Unknown tracker_backend: {tracker_backend}")
+
+    def load_learned_trackers(self, tracking_config: Dict[str, Any]) -> None:
+        """
+        Optionally load learned assignment scorer and division classifier.
+
+        Reads two optional keys from the tracking config section:
+          learned_cost_model:     path to assignment_scorer.pt
+          learned_division_model: path to division_classifier.pt
+
+        When absent or null, the pipeline falls back to Euclidean cost +
+        reconcile_lineage (existing behaviour, fully backwards-compatible).
+        """
+        self.assignment_scorer = None
+        self.division_classifier = None
+
+        cost_path = tracking_config.get("learned_cost_model")
+        if cost_path:
+            from HiTMicTools.tracking.assignment_scorer import AssignmentScorer
+            self.assignment_scorer = AssignmentScorer(cost_path)
+            self.main_logger.info(
+                f"Loaded learned assignment scorer from {cost_path} "
+                f"(threshold={self.assignment_scorer.threshold:.2f})"
+            )
+
+        div_path = tracking_config.get("learned_division_model")
+        if div_path:
+            from HiTMicTools.tracking.division_classifier import DivisionClassifier
+            self.division_classifier = DivisionClassifier(div_path)
+            self.main_logger.info(
+                f"Loaded learned division classifier from {div_path} "
+                f"(threshold={self.division_classifier.threshold:.2f})"
+            )
 
     def _load_tracker_config_from_zip(self, zip_path: str) -> Dict[str, Any]:
         """Load tracker config from zip file."""

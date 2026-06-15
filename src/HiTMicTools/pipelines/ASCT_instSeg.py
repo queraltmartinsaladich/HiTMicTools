@@ -506,7 +506,12 @@ class ASCT_instSeg(BasePipeline):
                 f"{refine_counts['class_flicker_rows']} class flicker rows"
             )
             fl_measurements, div_counts = detect_division_events(fl_measurements)
-            fl_measurements, rec_counts = reconcile_lineage(fl_measurements)
+            if getattr(self, "division_classifier", None) is not None:
+                masks_thw = img_analyser.labeled_mask[:, 0, 0, :, :]
+                fl_measurements, rec_counts = self.division_classifier.predict_divisions(
+                    fl_measurements, masks_thw)
+            else:
+                fl_measurements, rec_counts = reconcile_lineage(fl_measurements)
             fl_measurements, lys_counts = detect_lysis_events(fl_measurements)
             fl_measurements, fil_counts = detect_filamentation_events(fl_measurements)
             fl_measurements = compute_fl_trajectory_features(fl_measurements)
