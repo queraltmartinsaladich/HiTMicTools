@@ -34,12 +34,9 @@ pipeline_setup:
 models:
   model_collection: /scicore/home/boeluc00/martin0088/models/model_collection_semSegTrack.zip
 
-# ── Tracking (only used when tracking: true and no model_collection) ───────────
-# tracking:
-#   backend: hungarian
-#   parameters:
-#     max_distance: 25.0
-#     max_lost: 3
+# ── Tracking — semSegTrack bundle includes config_tracker.yml for btrack ────────
+tracking:
+  backend: btrack                        # config loaded from model_collection ZIP
 
 # ── Extra kwargs ───────────────────────────────────────────────────────────────
 # extra:
