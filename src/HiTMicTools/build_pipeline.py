@@ -69,14 +69,18 @@ def build_and_run_pipeline(config_file: str, worklist: str = None):
         tracker_backend = tracking_config.get("backend", "btrack")
 
         if tracker_backend == "hungarian":
-            hungarian_params = tracking_config.get("parameters", {})
+            hungarian_params = dict(tracking_config.get("parameters", {}))
+            hungarian_version = tracking_config.get(
+                "version", hungarian_params.pop("version", "v2")
+            )
+            hungarian_params["version"] = hungarian_version
             analysis_wf.load_tracker(
                 tracker_backend="hungarian",
                 tracker_config=hungarian_params,
             )
             print(
-                f"Tracking enabled: Hungarian "
-                f"(max_distance={hungarian_params.get('max_distance', 25.0)})"
+                f"Tracking enabled: Hungarian {hungarian_version} "
+                f"(max_distance={analysis_wf.cell_tracker.max_distance})"
             )
 
         elif tracker_backend == "btrack":

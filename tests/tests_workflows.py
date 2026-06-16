@@ -7,6 +7,8 @@ from HiTMicTools.confreader import ConfReader
 from HiTMicTools.pipelines.ASCT_semSeg import ASCT_semSeg
 from HiTMicTools.pipelines.ASCT_instSeg import ASCT_instSeg
 from HiTMicTools.pipelines.base_pipeline import BasePipeline
+from HiTMicTools.tracking.hungarian_tracker import HungarianTracker
+from HiTMicTools.tracking.hungarian_tracker_v5 import HungarianTrackerV5
 
 
 class TestPipelineConfigLoading(unittest.TestCase):
@@ -121,6 +123,45 @@ class TestOofDetectorLoading(unittest.TestCase):
             self.assertEqual(pipeline.oof_class_map, {"oof": 0})
         except Exception as e:
             self.fail(f"OofDetector loading failed: {e}")
+
+
+class TestHungarianTrackerLoading(unittest.TestCase):
+    def setUp(self):
+        self.temp_input = tempfile.mkdtemp(prefix="test_input_")
+        self.temp_output = tempfile.mkdtemp(prefix="test_output_")
+
+        class MinimalPipeline(BasePipeline):
+            required_models = set()
+
+            def analyse_image(self, *args, **kwargs):
+                pass
+
+        self.pipeline = MinimalPipeline(
+            input_path=self.temp_input,
+            output_path=self.temp_output,
+        )
+
+    def tearDown(self):
+        self.pipeline.remove_logger(self.pipeline.main_logger)
+        shutil.rmtree(self.temp_input, ignore_errors=True)
+        shutil.rmtree(self.temp_output, ignore_errors=True)
+
+    def test_hungarian_defaults_to_v2(self):
+        self.pipeline.load_tracker(tracker_backend="hungarian")
+
+        self.assertIsInstance(self.pipeline.cell_tracker, HungarianTracker)
+        self.assertEqual(self.pipeline.cell_tracker.max_distance, 25.0)
+        self.assertEqual(self.pipeline.cell_tracker.gap_bridge_frames, 2)
+
+    def test_hungarian_v5_is_explicit_opt_in(self):
+        self.pipeline.load_tracker(
+            tracker_backend="hungarian",
+            tracker_config={"version": "v5", "max_distance": 12.0},
+        )
+
+        self.assertIsInstance(self.pipeline.cell_tracker, HungarianTrackerV5)
+        self.assertEqual(self.pipeline.cell_tracker.max_distance, 12.0)
+        self.assertEqual(self.pipeline.cell_tracker.gap_bridge_frames, 5)
 
 
 if __name__ == "__main__":

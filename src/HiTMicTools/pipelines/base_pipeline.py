@@ -513,7 +513,9 @@ class BasePipeline(ABC):
             config_path: Path to config file (.yml/.json) or zip bundle (btrack only)
             tracker_override_args: Optional dict to override tracker parameters (btrack only)
             tracker_backend: Tracker backend - "btrack" or "hungarian"
-            tracker_config: Backend-specific parameters (hungarian only)
+            tracker_config: Backend-specific parameters (hungarian only). For the
+                Hungarian backend, optional key "version" selects the
+                implementation; omitted defaults to the legacy v2 tracker.
         """
         if tracker_backend == "btrack" and config_path and config_path.endswith(".zip"):
             with zipfile.ZipFile(config_path, "r") as _z:
@@ -528,11 +530,28 @@ class BasePipeline(ABC):
 
         if tracker_backend == "hungarian":
             from HiTMicTools.tracking.hungarian_tracker import HungarianTracker
+            from HiTMicTools.tracking.hungarian_tracker_v5 import HungarianTrackerV5
 
-            params = tracker_config or {}
-            self.cell_tracker = HungarianTracker(**params)
+            params = dict(tracker_config or {})
+            tracker_version = str(params.pop("version", "v2")).lower()
+            tracker_classes = {
+                "v1": HungarianTracker,
+                "v2": HungarianTracker,
+                "legacy": HungarianTracker,
+                "v5": HungarianTrackerV5,
+            }
+            if tracker_version not in tracker_classes:
+                valid_versions = ", ".join(sorted(tracker_classes))
+                raise ValueError(
+                    f"Unknown Hungarian tracker version: {tracker_version}. "
+                    f"Expected one of: {valid_versions}"
+                )
+
+            tracker_class = tracker_classes[tracker_version]
+            self.cell_tracker = tracker_class(**params)
             self.main_logger.info(
-                f"Hungarian tracker loaded (max_distance={params.get('max_distance', 25.0)})"
+                f"Hungarian tracker {tracker_version} loaded "
+                f"(max_distance={self.cell_tracker.max_distance})"
             )
 
         elif tracker_backend == "btrack":

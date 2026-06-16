@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 from HiTMicTools.tracking.hungarian_tracker import HungarianTracker
+from HiTMicTools.tracking.hungarian_tracker_v5 import HungarianTrackerV5
 
 
 def test_tracking_and_lockin():
@@ -65,6 +66,58 @@ def test_tracking_and_lockin():
     print("PASS: Other cells remain piNEG")
 
     print("\nAll tests passed!")
+
+
+def test_v5_stitches_temporally_disjoint_tracks():
+    df = pd.DataFrame(
+        [
+            {"frame": 0, "centroid_0": 10.0, "centroid_1": 10.0, "trackid": 1},
+            {"frame": 2, "centroid_0": 11.0, "centroid_1": 10.5, "trackid": 2},
+            {"frame": 2, "centroid_0": 10.8, "centroid_1": 10.2, "trackid": 3},
+        ]
+    )
+
+    tracker = HungarianTrackerV5()
+    stitched = tracker.stitch_tracks(df, max_stitch_distance=8.0)
+
+    assert stitched.loc[stitched["frame"] == 0, "trackid"].iloc[0] == 1
+    assert stitched.loc[stitched["trackid"] == 1, "frame"].tolist() == [0, 2]
+    assert stitched.groupby(["trackid", "frame"]).size().max() == 1
+
+
+def test_v5_track_objects_auto_stitches_before_lockin():
+    df = pd.DataFrame(
+        [
+            {
+                "frame": 0,
+                "centroid_0": 10.0,
+                "centroid_1": 10.0,
+                "area": 50.0,
+                "pi_class": "piNEG",
+            },
+            {
+                "frame": 2,
+                "centroid_0": 11.0,
+                "centroid_1": 10.5,
+                "area": 50.0,
+                "pi_class": "piPOS",
+            },
+            {
+                "frame": 20,
+                "centroid_0": 11.5,
+                "centroid_1": 10.8,
+                "area": 50.0,
+                "pi_class": "piNEG",
+            },
+        ]
+    )
+
+    tracker = HungarianTrackerV5(reid_max_gap=1, stitch_max_distance=8.0)
+    tracked = tracker.track_objects(df)
+
+    assert tracked["trackid"].nunique() == 1
+    locked = tracker.apply_pipos_lockin(tracked)
+    assert locked["pi_class"].tolist() == ["piNEG", "piPOS", "piPOS"]
 
 
 if __name__ == "__main__":
