@@ -1,3 +1,6 @@
+# Claude Code project context (contains private paths/info)
+CLAUDE.md
+
 # Virtual environments
 hitmic/
 .venv/
