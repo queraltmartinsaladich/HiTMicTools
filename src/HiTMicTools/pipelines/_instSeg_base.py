@@ -43,18 +43,17 @@ from HiTMicTools.data_analysis.analysis_tools import (
 from jetraw_tools.image_reader import ImageReader
 
 
-class ASCT_instSeg(BasePipeline):
+class _InstSegBase(BasePipeline):
     """
-    Pipeline for automated single-cell tracking with single-step instance segmentation.
+    Shared implementation for instance segmentation pipelines (RF-DETR-based).
+
+    Not a public pipeline — use ASCT_instSegRod or ASCT_instSegCoc instead.
 
     This pipeline processes microscopy images to:
     1. Restore focus in both brightfield and fluorescence channels (optional)
     2. Perform single-step instance segmentation and classification using RF-DETR-Segm
     3. Track cells across time frames
     4. Analyze fluorescence intensity and other cellular properties
-
-    This pipeline simplifies the traditional 3-step approach (segmentation → connected components → classification)
-    by using an end-to-end instance segmentation model that outputs labeled masks and class predictions directly.
 
     Attributes:
         reference_channel (int): Index of the brightfield/reference channel

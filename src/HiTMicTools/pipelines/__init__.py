@@ -12,7 +12,6 @@ from typing import Dict, Type, Set
 from HiTMicTools.pipelines.base_pipeline import BasePipeline
 from HiTMicTools.pipelines.ASCT_semSeg import ASCT_semSeg
 from HiTMicTools.pipelines.ASCT_singleFrame import ASCT_singleFrame
-from HiTMicTools.pipelines.ASCT_instSeg import ASCT_instSeg
 from HiTMicTools.pipelines.ASCT_instSegRod import ASCT_instSegRod
 from HiTMicTools.pipelines.ASCT_instSegCoc import ASCT_instSegCoc
 from HiTMicTools.pipelines.ASCT_cellasic import ASCT_cellasic
@@ -52,8 +51,6 @@ class PipelineMetadata:
 PIPELINE_REGISTRY: Dict[str, PipelineMetadata] = {
     "ASCT_semSeg": PipelineMetadata(ASCT_semSeg),
     "ASCT_singleFrame": PipelineMetadata(ASCT_singleFrame),
-    # instSeg variants — use instSegRod or instSegCoc; instSeg kept for backwards compat
-    "ASCT_instSeg": PipelineMetadata(ASCT_instSeg),
     "ASCT_instSegRod": PipelineMetadata(ASCT_instSegRod),
     "ASCT_instSegCoc": PipelineMetadata(ASCT_instSegCoc),
     "ASCT_cellasic": PipelineMetadata(ASCT_cellasic),
@@ -107,7 +104,6 @@ __all__ = [
     "BasePipeline",
     "ASCT_semSeg",
     "ASCT_singleFrame",
-    "ASCT_instSeg",
     "ASCT_instSegRod",
     "ASCT_instSegCoc",
     "ASCT_cellasic",
