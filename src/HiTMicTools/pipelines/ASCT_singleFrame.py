@@ -85,6 +85,7 @@ class ASCT_singleFrame(BasePipeline):
         name: str,
         export_labeled_mask: bool = True,
         export_aligned_image: bool = True,
+        **kwargs,
     ) -> None:
         """Pipeline analysis for each image."""
 
@@ -92,6 +93,7 @@ class ASCT_singleFrame(BasePipeline):
         device = get_device()
         is_cuda = device.type == "cuda"
         movie_name = remove_file_extension(name)
+        name = movie_name
         img_logger = self.setup_logger(self.output_path, movie_name)
         img_logger.info(f"Start single-frame analysis for {movie_name}")
         if getattr(self, "tracking", False):
@@ -237,7 +239,8 @@ class ASCT_singleFrame(BasePipeline):
         img_logger.info(f"{img_analyser.total_rois} objects found in segmentation")
 
         # 3.3 FL union mask — recover ghost cells visible in FL but missed by BF segmentation
-        n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm)
+        # fl_norm has T=2 (duplicated for BaSiC) but labeled_mask has T=1; use only frame 0
+        n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm[0:1])
         if n_ghosts > 0:
             img_analyser.total_rois = int(img_analyser.labeled_mask.max())
             img_logger.info(f"3.3 - FL union mask: {n_ghosts} ghost cell(s) added")
@@ -268,7 +271,7 @@ class ASCT_singleFrame(BasePipeline):
         # 4.4 Morphology-based label corrections (R1 only — single frame, no division detection)
         img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
         fl_measurements, morph_counts = apply_semSeg_morphology_corrections(
-            fl_measurements, img_analyser.labeled_mask,
+            fl_measurements,
             enable_division_detection=False,
         )
         img_logger.info(
@@ -304,6 +307,7 @@ class ASCT_singleFrame(BasePipeline):
             if ghost_mask.any():
                 fl_measurements["pi_class"] = "piNEG"
                 fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
+            fl_measurements["file"] = name
             d_summary = pd.DataFrame()
 
         # 5. Export data --------------------------------------------
@@ -386,7 +390,7 @@ class ASCT_singleFrame(BasePipeline):
             img_logger.info("Exported 32-bit transformed image for detailed inspection")
 
         img_logger.info(f"Analysis completed for {movie_name}", show_memory=True)
-        del prob_map, img, fl_measurements, d_summary, img_analyser
+        del prob_map, fl_measurements, d_summary, img_analyser
         gc.collect()
         empty_gpu_cache(device)
         img_logger.info("Garbage collection completed", show_memory=True)
@@ -395,140 +399,6 @@ class ASCT_singleFrame(BasePipeline):
 
         return name
 
-    def clear_background(
-        self,
-        ip: ImagePreprocessor,
-        channel: int,
-        nFrames: range,
-        method: str,
-        pixel_size: Optional[float] = None,
-    ) -> None:
-        """Remove background from images using specified method.
-
-        Args:
-        ip: Image preprocessor object
-        channel: Channel to process
-        nFrames: Range of frames to process
-        method: Background removal method ('standard', 'basicpy', or 'basicpy_fl')
-        pixel_size: Physical pixel size in microns
-        """
-        # If using the basicpy_fl in config, reference channel is still transform with DoG
-        if method == "basicpy_fl" and channel == self.reference_channel:
-            method = "standard"
-        elif method == "basicpy_fl" and channel == self.pi_channel:
-            method = "basicpy"
-
-        methods = {
-            "standard": [
-                {
-                    "nframes": nFrames,
-                    "nchannels": channel,
-                    "nslices": 0,
-                    "sigma_r": 20,
-                    "method": "divide",
-                }
-            ],
-            "basicpy": [
-                {
-                    "nframes": nFrames,
-                    "nchannels": channel,
-                    "nslices": 0,
-                    "method": "basicpy",
-                    "smoothness_flatfield": 5,
-                    "smoothness_darkfield": 5,
-                    "get_darkfield": False,
-                    "sort_intensity": False,
-                    "fitting_mode": "approximate",
-                }
-            ],
-        }
-
-        if method not in methods:
-            raise ValueError(f"Invalid method: {method}")
-
-        for params in methods[method]:
-            if method == "basicpy":
-                ip.clear_image_background(**params)
-            else:
-                ip.clear_image_background(**params, unit="um", pixel_size=pixel_size)
-
-    def generate_data_summary(
-        self,
-        fl_measurements: pd.DataFrame,
-        by_list: List[str],
-        img_logger: MemoryLogger,
-    ) -> pd.DataFrame:
-        """
-        Generate a summary DataFrame from fluorescence measurements with PI classification.
-
-        This method aggregates the fluorescence measurements by file, frame, channel,
-        timestamp information, and object class to create a summary of PI-positive and
-        PI-negative cell counts and areas.
-
-        Args:
-            fl_measurements: DataFrame containing fluorescence measurements with 'pi_class' column.
-                Must include columns: 'file', 'frame', 'channel', 'date_time', 'timestep',
-                'abslag_in_s', 'object_class', 'label', 'area', and 'pi_class'.
-            img_logger: Logger instance for recording progress and errors.
-
-        Returns:
-            pd.DataFrame: A summary DataFrame with aggregated counts and areas, or an empty
-                DataFrame if an error occurs during the groupby operation.
-
-        Notes:
-            The summary includes the following aggregated metrics:
-            - total_count: Total number of objects per group
-            - pi_class_neg: Count of PI-negative objects
-            - pi_class_pos: Count of PI-positive objects
-            - area_pineg: Total area of PI-negative objects
-            - area_pipos: Total area of PI-positive objects
-            - area_total: Total area of all objects
-        """
-        try:
-            img_logger.info(f"Group data by {by_list}")
-            d_summary = (
-                fl_measurements.groupby(by_list)
-                .agg(
-                    total_count=("label", "count"),
-                    pi_class_neg=("pi_class", lambda x: (x == "piNEG").sum()),
-                    pi_class_pos=("pi_class", lambda x: (x == "piPOS").sum()),
-                    area_pineg=(
-                        "area",
-                        lambda x: x[
-                            fl_measurements.loc[x.index, "pi_class"] == "piNEG"
-                        ].sum(),
-                    ),
-                    area_pipos=(
-                        "area",
-                        lambda x: x[
-                            fl_measurements.loc[x.index, "pi_class"] == "piPOS"
-                        ].sum(),
-                    ),
-                    area_total=("area", "sum"),
-                )
-                .reset_index()
-            )
-
-            img_logger.info(
-                f"Groupby operation completed successfully. Shape of d_summary: {d_summary.shape}"
-            )
-        except Exception as e:
-            img_logger.error(f"Error during groupby operation: {str(e)}")
-            img_logger.error(f"Columns in fl_measurements: {fl_measurements.columns}")
-            img_logger.error(
-                f"Unique values in 'pi_class': {fl_measurements['pi_class'].unique()}"
-            )
-            d_summary = pd.DataFrame()
-
-        img_logger.info("d_summary created successfully", show_memory=True)
-
-        return d_summary
-
-    @staticmethod
-    def check_px_values(ip, channel: int, round: int = None) -> np.ndarray:
-        """Calculate mean pixel intensity across frames for a given channel."""
-        means = np.mean(ip.img[:, 0, channel], axis=(1, 2))
-        return np.round(means, round) if round is not None else means
 
     def _read_and_normalize_image(
         self,

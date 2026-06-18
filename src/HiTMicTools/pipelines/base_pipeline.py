@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Dict, Optional, Any
 from abc import ABC, abstractmethod
 import numpy as np
+import pandas as pd
 
 # Local imports
 import HiTMicTools
@@ -39,6 +40,7 @@ from HiTMicTools.model_arch.flexresnet import FlexResNet
 from HiTMicTools.model_components.pi_classifier import PIClassifier
 from monai.networks.nets import UNet as monai_unet
 from HiTMicTools.utils import read_metadata, update_config
+from HiTMicTools.img_processing.img_processor import ImagePreprocessor
 
 
 @contextmanager
@@ -214,6 +216,10 @@ class BasePipeline(ABC):
         self.fl_focus_restorer = None
         self.assignment_scorer = None
         self.division_classifier = None
+        self.image_segmentator = None
+        self.object_classifier = None
+        self.oof_detector = None
+        self.sc_segmenter = None
 
     def setup_logger(
         self,
@@ -226,7 +232,6 @@ class BasePipeline(ABC):
 
         # Set up logger file
         logging.setLoggerClass(MemoryLogger)
-        os.path.basename(os.path.normpath(name))
         log_file = os.path.join(output_path, f"{name}_{logger_id}_analysis.log")
         logger_name = f"{output_path}_{name}_{logger_id}"  # Use a unique identifier for each instance important for parallelisation
         logger = logging.getLogger(logger_name)
@@ -331,7 +336,7 @@ class BasePipeline(ABC):
         elif model_type == "cell-classifier":
             model_graph = FlexResNet(**model_configs["model_args"])
             self.object_classifier = CellClassifier(
-                model_path, model_graph=model_graph, compile_mode=compile_mode, **config_dic["model_args"]
+                model_path, model_graph=model_graph, compile_mode=compile_mode, **config_dic.get("inferer_args", {})
             )
             self.main_logger.info("Loaded model: cell_classifier (FlexResNet)")
         elif model_type == "focus-restorer-fl":
@@ -573,7 +578,7 @@ class BasePipeline(ABC):
             else:
                 override_args = tracker_override_args or {}
                 self.cell_tracker = CellTracker(
-                    config_dict=config_path, override_args=override_args
+                    config_path=config_path, override_args=override_args
                 )
 
             self.main_logger.info(f"Cell tracker loaded from: {config_path}")
@@ -770,6 +775,146 @@ class BasePipeline(ABC):
         else:
             self.main_logger.info("Models will not be compiled (compile_models: false)")
 
+    def batch_classify_rois(self, img_analyser, batch_size=5):
+        """Classify ROIs in batches to avoid OOM on long movies."""
+        labeled_mask = img_analyser.get(
+            "labels", index=(slice(None), 0, 0), to_numpy=True
+        )
+        img = img_analyser.get("image", index=(slice(None), 0, 0), to_numpy=True)
+
+        n_frames = labeled_mask.shape[0]
+        all_object_classes = []
+        all_labels = []
+
+        for start_frame in range(0, n_frames, batch_size):
+            end_frame = min(start_frame + batch_size, n_frames)
+            batch_classes, batch_labels = self.object_classifier.classify_rois(
+                labeled_mask[start_frame:end_frame],
+                img[start_frame:end_frame],
+            )
+            all_object_classes.extend(batch_classes)
+            all_labels.extend(batch_labels)
+
+        return all_object_classes, all_labels
+
+    def clear_background(
+        self,
+        ip: ImagePreprocessor,
+        channel: int,
+        nFrames: range,
+        method: str,
+        pixel_size: Optional[float] = None,
+    ) -> None:
+        """Remove background from images using specified method.
+
+        Args:
+            ip: Image preprocessor object
+            channel: Channel to process
+            nFrames: Range of frames to process
+            method: Background removal method ('standard', 'basicpy', or 'basicpy_fl')
+            pixel_size: Physical pixel size in microns
+        """
+        pi_channel = getattr(self, "pi_channel", None)
+        gfp_channel = getattr(self, "gfp_channel", None)
+        if method == "basicpy_fl" and channel == self.reference_channel:
+            method = "standard"
+        elif method == "basicpy_fl" and channel in (pi_channel, gfp_channel):
+            method = "basicpy"
+
+        methods = {
+            "standard": [
+                {
+                    "nframes": nFrames,
+                    "nchannels": channel,
+                    "nslices": 0,
+                    "sigma_r": 20,
+                    "method": "divide",
+                }
+            ],
+            "basicpy": [
+                {
+                    "nframes": nFrames,
+                    "nchannels": channel,
+                    "nslices": 0,
+                    "method": "basicpy",
+                    "smoothness_flatfield": 5,
+                    "smoothness_darkfield": 5,
+                    "get_darkfield": False,
+                    "sort_intensity": False,
+                    "fitting_mode": "approximate",
+                }
+            ],
+        }
+
+        if method not in methods:
+            raise ValueError(f"Invalid method: {method}")
+
+        for params in methods[method]:
+            if method == "basicpy":
+                ip.clear_image_background(**params)
+            else:
+                ip.clear_image_background(**params, unit="um", pixel_size=pixel_size)
+
+    def generate_data_summary(
+        self,
+        fl_measurements: pd.DataFrame,
+        by_list: List[str],
+        img_logger: MemoryLogger,
+    ) -> pd.DataFrame:
+        """Aggregate fluorescence measurements into PI+/PI− counts and areas per group.
+
+        Args:
+            fl_measurements: Per-cell DataFrame with pi_class, label, and area columns.
+            by_list: Columns to group by (e.g. file, frame, object_class).
+            img_logger: Logger instance.
+
+        Returns:
+            Summary DataFrame, or empty DataFrame if groupby fails.
+        """
+        try:
+            img_logger.info(f"Group data by {by_list}")
+            d_summary = (
+                fl_measurements.groupby(by_list)
+                .agg(
+                    total_count=("label", "count"),
+                    pi_class_neg=("pi_class", lambda x: (x == "piNEG").sum()),
+                    pi_class_pos=("pi_class", lambda x: (x == "piPOS").sum()),
+                    area_pineg=(
+                        "area",
+                        lambda x: x[
+                            fl_measurements.loc[x.index, "pi_class"] == "piNEG"
+                        ].sum(),
+                    ),
+                    area_pipos=(
+                        "area",
+                        lambda x: x[
+                            fl_measurements.loc[x.index, "pi_class"] == "piPOS"
+                        ].sum(),
+                    ),
+                    area_total=("area", "sum"),
+                )
+                .reset_index()
+            )
+            img_logger.info(
+                f"Groupby operation completed successfully. Shape of d_summary: {d_summary.shape}"
+            )
+        except Exception as e:
+            img_logger.error(f"Error during groupby operation: {str(e)}")
+            img_logger.error(f"Columns in fl_measurements: {fl_measurements.columns}")
+            img_logger.error(
+                f"Unique values in 'pi_class': {fl_measurements['pi_class'].unique()}"
+            )
+            d_summary = pd.DataFrame()
+
+        img_logger.info("d_summary created successfully", show_memory=True)
+        return d_summary
+
+    @staticmethod
+    def check_px_values(ip, channel: int, round: int = None) -> np.ndarray:
+        """Return mean pixel intensity per frame for a given channel."""
+        means = np.mean(ip.img[:, 0, channel], axis=(1, 2))
+        return np.round(means, round) if round is not None else means
+
     def get_files(
         self,
         input_path: str,
@@ -853,6 +998,7 @@ class BasePipeline(ABC):
         file_list: Optional[str] = None,
         export_labeled_mask: bool = False,
         export_aligned_image: bool = False,
+        no_reanalyse: bool = True,
         **kwargs,
     ) -> None:
         """
@@ -885,7 +1031,7 @@ class BasePipeline(ABC):
             self.input_path,
             self.output_path,
             files_pattern,
-            no_reanalyse=True,
+            no_reanalyse=no_reanalyse,
         )
 
         if not file_list:
@@ -931,6 +1077,7 @@ class BasePipeline(ABC):
         export_labeled_mask: bool = True,
         export_aligned_image: bool = True,
         num_workers: Optional[int] = None,
+        no_reanalyse: bool = True,
         **kwargs,
     ) -> None:
         """
@@ -956,7 +1103,7 @@ class BasePipeline(ABC):
             self.input_path,
             self.output_path,
             files_pattern,
-            no_reanalyse=True,
+            no_reanalyse=no_reanalyse,
         )
 
         if not file_list:

@@ -478,13 +478,13 @@ class ASCT_semSeg(BasePipeline):
                     fl_measurements, logger=img_logger
                 )
 
+            fl_measurements["file"] = name
             # Generate summary data using the dedicated method
             d_summary = self.generate_data_summary(
                 fl_measurements,
                 [
                     "file",
                     "frame",
-                    "channel",
                     "date_time",
                     "timestep",
                     "abslag_in_s",
@@ -496,10 +496,10 @@ class ASCT_semSeg(BasePipeline):
             if ghost_mask.any():
                 fl_measurements["pi_class"] = "piNEG"
                 fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
+            fl_measurements["file"] = name
             d_summary = pd.DataFrame()
 
         # 4.7 Track event detection + FL trajectory (requires final pi_class)
-        fl_measurements["file"] = name
         if self.tracking and self.cell_tracker is not None:
             img_logger.info("4.7 - Refining tracks + detecting events", show_memory=False)
             fl_measurements, refine_counts = refine_tracks(fl_measurements)
@@ -631,164 +631,4 @@ class ASCT_semSeg(BasePipeline):
 
         return name
 
-    def batch_classify_rois(self, img_analyser, batch_size=5):
-        labeled_mask = img_analyser.get(
-            "labels", index=(slice(None), 0, 0), to_numpy=True
-        )
-        img = img_analyser.get("image", index=(slice(None), 0, 0), to_numpy=True)
 
-        n_frames = labeled_mask.shape[0]
-        all_object_classes = []
-        all_labels = []
-
-        for start_frame in range(0, n_frames, batch_size):
-            end_frame = min(start_frame + batch_size, n_frames)
-
-            # Extract batch of frames
-            batch_labeled_mask = labeled_mask[start_frame:end_frame]
-            batch_img = img[start_frame:end_frame]
-
-            # Classify the batch
-            batch_classes, batch_labels = self.object_classifier.classify_rois(
-                batch_labeled_mask, batch_img
-            )
-
-            all_object_classes.extend(batch_classes)
-            all_labels.extend(batch_labels)
-
-        return all_object_classes, all_labels
-
-    def clear_background(
-        self,
-        ip: ImagePreprocessor,
-        channel: int,
-        nFrames: range,
-        method: str,
-        pixel_size: Optional[float] = None,
-    ) -> None:
-        """Remove background from images using specified method.
-
-        Args:
-        ip: Image preprocessor object
-        channel: Channel to process
-        nFrames: Range of frames to process
-        method: Background removal method ('standard', 'basicpy', or 'basicpy_fl')
-        pixel_size: Physical pixel size in microns
-        """
-        # If using the basicpy_fl in config, reference channel is still transform with DoG
-        if method == "basicpy_fl" and channel == self.reference_channel:
-            method = "standard"
-        elif method == "basicpy_fl" and channel == self.pi_channel:
-            method = "basicpy"
-
-        methods = {
-            "standard": [
-                {
-                    "nframes": nFrames,
-                    "nchannels": channel,
-                    "nslices": 0,
-                    "sigma_r": 20,
-                    "method": "divide",
-                }
-            ],
-            "basicpy": [
-                {
-                    "nframes": nFrames,
-                    "nchannels": channel,
-                    "nslices": 0,
-                    "method": "basicpy",
-                    "smoothness_flatfield": 5,
-                    "smoothness_darkfield": 5,
-                    "get_darkfield": False,
-                    "sort_intensity": False,
-                    "fitting_mode": "approximate",
-                }
-            ],
-        }
-
-        if method not in methods:
-            raise ValueError(f"Invalid method: {method}")
-
-        for params in methods[method]:
-            if method == "basicpy":
-                ip.clear_image_background(**params)
-            else:
-                ip.clear_image_background(**params, unit="um", pixel_size=pixel_size)
-
-    def generate_data_summary(
-        self,
-        fl_measurements: pd.DataFrame,
-        by_list: List[str],
-        img_logger: MemoryLogger,
-    ) -> pd.DataFrame:
-        """
-        Generate a summary DataFrame from fluorescence measurements with PI classification.
-
-        This method aggregates the fluorescence measurements by file, frame, channel,
-        timestamp information, and object class to create a summary of PI-positive and
-        PI-negative cell counts and areas.
-
-        Args:
-            fl_measurements: DataFrame containing fluorescence measurements with 'pi_class' column.
-                Must include columns: 'file', 'frame', 'channel', 'date_time', 'timestep',
-                'abslag_in_s', 'object_class', 'label', 'area', and 'pi_class'.
-            img_logger: Logger instance for recording progress and errors.
-
-        Returns:
-            pd.DataFrame: A summary DataFrame with aggregated counts and areas, or an empty
-                DataFrame if an error occurs during the groupby operation.
-
-        Notes:
-            The summary includes the following aggregated metrics:
-            - total_count: Total number of objects per group
-            - pi_class_neg: Count of PI-negative objects
-            - pi_class_pos: Count of PI-positive objects
-            - area_pineg: Total area of PI-negative objects
-            - area_pipos: Total area of PI-positive objects
-            - area_total: Total area of all objects
-        """
-        try:
-            img_logger.info(f"Group data by {by_list}")
-            d_summary = (
-                fl_measurements.groupby(by_list)
-                .agg(
-                    total_count=("label", "count"),
-                    pi_class_neg=("pi_class", lambda x: (x == "piNEG").sum()),
-                    pi_class_pos=("pi_class", lambda x: (x == "piPOS").sum()),
-                    area_pineg=(
-                        "area",
-                        lambda x: x[
-                            fl_measurements.loc[x.index, "pi_class"] == "piNEG"
-                        ].sum(),
-                    ),
-                    area_pipos=(
-                        "area",
-                        lambda x: x[
-                            fl_measurements.loc[x.index, "pi_class"] == "piPOS"
-                        ].sum(),
-                    ),
-                    area_total=("area", "sum"),
-                )
-                .reset_index()
-            )
-
-            img_logger.info(
-                f"Groupby operation completed successfully. Shape of d_summary: {d_summary.shape}"
-            )
-        except Exception as e:
-            img_logger.error(f"Error during groupby operation: {str(e)}")
-            img_logger.error(f"Columns in fl_measurements: {fl_measurements.columns}")
-            img_logger.error(
-                f"Unique values in 'pi_class': {fl_measurements['pi_class'].unique()}"
-            )
-            d_summary = pd.DataFrame()
-
-        img_logger.info("d_summary created successfully", show_memory=True)
-
-        return d_summary
-
-    @staticmethod
-    def check_px_values(ip, channel: int, round: int = None) -> np.ndarray:
-        """Calculate mean pixel intensity across frames for a given channel."""
-        means = np.mean(ip.img[:, 0, channel], axis=(1, 2))
-        return np.round(means, round) if round is not None else means

@@ -344,6 +344,7 @@ class ASCT_cellasic(BasePipeline):
 
                 # Re-insert slice axis: (T, C, X, Y) -> (T, 1, C, X, Y)
                 ip.img = cropped_tcxy[:, np.newaxis, :, :, :]
+                nFrames = ip.img.shape[0]
                 size_x, size_y = ip.img.shape[-2], ip.img.shape[-1]
                 img_logger.info(f"  image shape after crop: {ip.img.shape}", show_memory=True)
         else:
@@ -697,7 +698,6 @@ class ASCT_cellasic(BasePipeline):
                 [
                     "file",
                     "frame",
-                    "channel",
                     "date_time",
                     "timestep",
                     "abslag_in_s",
@@ -793,7 +793,7 @@ class ASCT_cellasic(BasePipeline):
             )
 
         img_logger.info(f"Analysis completed for {movie_name}", show_memory=True)
-        del stacked_labeled_masks, img, fl_measurements, d_summary, img_analyser
+        del stacked_labeled_masks, fl_measurements, d_summary, img_analyser
         gc.collect()
         empty_gpu_cache(device)
         img_logger.info("Garbage collection completed", show_memory=True)
@@ -801,107 +801,3 @@ class ASCT_cellasic(BasePipeline):
         self.remove_logger(img_logger)
 
         return name
-
-    # ----- helpers (inherited verbatim from ASCT_instSeg conceptually; -----
-    # copied here to keep the pipeline file self-contained) -----
-
-    def clear_background(
-        self,
-        ip: ImagePreprocessor,
-        channel: int,
-        nFrames: range,
-        method: str,
-        pixel_size: Optional[float] = None,
-    ) -> None:
-        """Remove background from images using specified method."""
-        if method == "basicpy_fl" and channel == self.reference_channel:
-            method = "standard"
-        elif method == "basicpy_fl" and channel == self.pi_channel:
-            method = "basicpy"
-
-        methods = {
-            "standard": [
-                {
-                    "nframes": nFrames,
-                    "nchannels": channel,
-                    "nslices": 0,
-                    "sigma_r": 20,
-                    "method": "divide",
-                }
-            ],
-            "basicpy": [
-                {
-                    "nframes": nFrames,
-                    "nchannels": channel,
-                    "nslices": 0,
-                    "method": "basicpy",
-                    "smoothness_flatfield": 5,
-                    "smoothness_darkfield": 5,
-                    "get_darkfield": False,
-                    "sort_intensity": False,
-                    "fitting_mode": "approximate",
-                }
-            ],
-        }
-
-        if method not in methods:
-            raise ValueError(f"Invalid method: {method}")
-
-        for params in methods[method]:
-            if method == "basicpy":
-                ip.clear_image_background(**params)
-            else:
-                ip.clear_image_background(**params, unit="um", pixel_size=pixel_size)
-
-    def generate_data_summary(
-        self,
-        fl_measurements: pd.DataFrame,
-        by_list: List[str],
-        img_logger: MemoryLogger,
-    ) -> pd.DataFrame:
-        """Aggregate fluorescence measurements with PI classification."""
-        try:
-            img_logger.info(f"Group data by {by_list}")
-            d_summary = (
-                fl_measurements.groupby(by_list)
-                .agg(
-                    total_count=("label", "count"),
-                    pi_class_neg=("pi_class", lambda x: (x == "piNEG").sum()),
-                    pi_class_pos=("pi_class", lambda x: (x == "piPOS").sum()),
-                    area_pineg=(
-                        "area",
-                        lambda x: x[
-                            fl_measurements.loc[x.index, "pi_class"] == "piNEG"
-                        ].sum(),
-                    ),
-                    area_pipos=(
-                        "area",
-                        lambda x: x[
-                            fl_measurements.loc[x.index, "pi_class"] == "piPOS"
-                        ].sum(),
-                    ),
-                    area_total=("area", "sum"),
-                )
-                .reset_index()
-            )
-
-            img_logger.info(
-                f"Groupby operation completed successfully. Shape of d_summary: {d_summary.shape}"
-            )
-        except Exception as e:
-            img_logger.error(f"Error during groupby operation: {str(e)}")
-            img_logger.error(f"Columns in fl_measurements: {fl_measurements.columns}")
-            img_logger.error(
-                f"Unique values in 'pi_class': {fl_measurements['pi_class'].unique()}"
-            )
-            d_summary = pd.DataFrame()
-
-        img_logger.info("d_summary created successfully", show_memory=True)
-
-        return d_summary
-
-    @staticmethod
-    def check_px_values(ip, channel: int, round: int = None) -> np.ndarray:
-        """Calculate mean pixel intensity across frames for a given channel."""
-        means = np.mean(ip.img[:, 0, channel], axis=(1, 2))
-        return np.round(means, round) if round is not None else means

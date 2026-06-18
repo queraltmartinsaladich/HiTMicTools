@@ -89,12 +89,13 @@ class OOF_detection(BasePipeline):
             size_y = metadata.images[0].pixels.size_y
             n_channels = metadata.images[0].pixels.size_c
             n_frames = metadata.images[0].pixels.size_t
-        except:
+        except Exception as e:
             # Fallback to "default metadata"
             pixel_size = 0.65  # Default pixel size in microns (typical for microscopy)
             size_x, size_y, n_channels, n_frames = self._infer_default_img_dims(img)
             logger.warning(
-                f"Could not extract metadata from {name}. Using default pixel_size={pixel_size} µm"
+                f"Could not extract metadata from {name} ({type(e).__name__}: {e}). "
+                f"Using default pixel_size={pixel_size} µm"
             )
 
         img = img.reshape(n_frames, n_channels, size_x, size_y)
@@ -317,7 +318,7 @@ class OOF_detection(BasePipeline):
             return self._oof_label_lookup
 
         lookup: Dict[int, str] = {}
-        if self.oof_class_map:
+        if getattr(self, "oof_class_map", None):
             sample_key = next(iter(self.oof_class_map))
             if isinstance(sample_key, str):
                 lookup = {int(v): k for k, v in self.oof_class_map.items()}
