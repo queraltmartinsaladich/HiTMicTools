@@ -102,7 +102,11 @@ def _shifted_iou(mask_t: np.ndarray, mask_t1: np.ndarray,
     """IoU after shifting mask_t to predicted position at t+1 via centroid delta."""
     dy = int(round(cy_t1 - cy_t))
     dx = int(round(cx_t1 - cx_t))
-    shifted = np.roll(np.roll(mask_t, dy, axis=0), dx, axis=1)
+    H, W = mask_t.shape
+    pad_top    = max(dy, 0);  pad_bottom = max(-dy, 0)
+    pad_left   = max(dx, 0);  pad_right  = max(-dx, 0)
+    padded = np.pad(mask_t, ((pad_top, pad_bottom), (pad_left, pad_right)))
+    shifted = padded[pad_bottom:pad_bottom + H, pad_right:pad_right + W]
     return _mask_iou(shifted, mask_t1)
 
 

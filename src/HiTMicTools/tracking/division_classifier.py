@@ -78,8 +78,9 @@ class DivisionClassifier:
 
         Args:
             fl_measurements: Per-cell per-frame DataFrame (post-tracking).
-                             Must contain: trackid, frame, area, centroid_x,
-                             centroid_y, label, object_class.
+                             Must contain: trackid, frame, area, label,
+                             object_class. Centroids are read from regionprops
+                             on the mask array, not from the DataFrame.
             masks:           (T, H, W) uint16 labeled mask array for the movie.
             area_drop_frac:  Minimum fractional area drop to trigger a division
                              candidate check (default 0.35).
@@ -90,15 +91,15 @@ class DivisionClassifier:
             fl_measurements: Input DataFrame with division_parent_trackid filled.
             counts:          Dict with n_reconciled_divisions.
         """
-        if "division_parent_trackid" not in fl_measurements.columns:
-            fl_measurements["division_parent_trackid"] = np.nan
+        df = fl_measurements.copy()
+        if "division_parent_trackid" not in df.columns:
+            df["division_parent_trackid"] = np.nan
 
         stats = compute_movie_stats(masks)
         med_major = stats["median_major"]
         T = masks.shape[0]
 
         n_found = 0
-        df = fl_measurements
 
         # Build per-frame label→trackid reverse map
         for t in range(1, T):
@@ -188,9 +189,7 @@ class DivisionClassifier:
                     for d_label in (d1_label, d2_label):
                         d_track = label_to_track_t.get(d_label)
                         if d_track is not None:
-                            mask_row = ((df["trackid"] == d_track) &
-                                        (df["frame"] == t))
-                            df.loc[mask_row, "division_parent_trackid"] = trackid_prev
+                            df.loc[df["trackid"] == d_track, "division_parent_trackid"] = trackid_prev
                     n_found += 1
 
         return df, {"n_reconciled_divisions": n_found}

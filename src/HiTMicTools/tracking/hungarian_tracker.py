@@ -38,6 +38,57 @@ from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
 
 
+def apply_pipos_lockin(
+    measurements_df: pd.DataFrame,
+    logger: Optional[logging.Logger] = None,
+) -> pd.DataFrame:
+    """Enforce piPOS lock-in: once a track is piPOS, all subsequent frames stay piPOS."""
+    if (
+        "trackid" not in measurements_df.columns
+        or "pi_class" not in measurements_df.columns
+    ):
+        if logger:
+            logger.warning("piPOS lock-in skipped: missing trackid or pi_class column")
+        return measurements_df
+
+    override_count = 0
+    tracks_with_lockin = 0
+    tracked = measurements_df["trackid"] != -1
+    n_tracked_cells = int(tracked.sum())
+    n_untracked = int((~tracked).sum())
+    pipos_before = int((measurements_df["pi_class"] == "piPOS").sum())
+
+    for tid, group in measurements_df.loc[tracked].groupby("trackid"):
+        pipos_frames = group.loc[group["pi_class"] == "piPOS", "frame"]
+        if len(pipos_frames) == 0:
+            continue
+        first_pipos_frame = pipos_frames.min()
+        mask = (
+            (measurements_df["trackid"] == tid)
+            & (measurements_df["frame"] > first_pipos_frame)
+            & (measurements_df["pi_class"] != "piPOS")
+        )
+        n_overrides = int(mask.sum())
+        if n_overrides > 0:
+            tracks_with_lockin += 1
+            override_count += n_overrides
+        measurements_df.loc[mask, "pi_class"] = "piPOS"
+
+    pipos_after = int((measurements_df["pi_class"] == "piPOS").sum())
+
+    if logger:
+        logger.info(
+            f"piPOS lock-in summary:\n"
+            f"  Tracked detections: {n_tracked_cells}, Untracked: {n_untracked}\n"
+            f"  Tracks with lock-in applied: {tracks_with_lockin}\n"
+            f"  Classifications overridden: {override_count}\n"
+            f"  piPOS count: {pipos_before} -> {pipos_after} "
+            f"(+{pipos_after - pipos_before})"
+        )
+
+    return measurements_df
+
+
 class HungarianTracker:
     """Frame-to-frame optimal assignment tracker with appearance cost,
     piPOS lock-in, and gap bridging."""
@@ -340,7 +391,7 @@ class HungarianTracker:
                 f"{total_new} new tracks\n"
                 f"  Centroid distances: mean={mean_dist:.1f}px, "
                 f"p95={p95_dist:.1f}px, max={max_dist_used:.1f}px "
-                f"(total-cost cutoff={self.max_distance}px)"
+                f"(total-cost cutoff={effective_max_dist:.1f}px)"
             )
 
         return df
@@ -354,52 +405,7 @@ class HungarianTracker:
         measurements_df: pd.DataFrame,
         logger: Optional[logging.Logger] = None,
     ) -> pd.DataFrame:
-        """Enforce piPOS lock-in: once a track is piPOS, all subsequent
-        frames stay piPOS."""
-        if (
-            "trackid" not in measurements_df.columns
-            or "pi_class" not in measurements_df.columns
-        ):
-            if logger:
-                logger.warning("piPOS lock-in skipped: missing trackid or pi_class column")
-            return measurements_df
-
-        override_count = 0
-        tracks_with_lockin = 0
-        tracked = measurements_df["trackid"] != -1
-        n_tracked_cells = int(tracked.sum())
-        n_untracked = int((~tracked).sum())
-        pipos_before = int((measurements_df["pi_class"] == "piPOS").sum())
-
-        for tid, group in measurements_df.loc[tracked].groupby("trackid"):
-            pipos_frames = group.loc[group["pi_class"] == "piPOS", "frame"]
-            if len(pipos_frames) == 0:
-                continue
-            first_pipos_frame = pipos_frames.min()
-            mask = (
-                (measurements_df["trackid"] == tid)
-                & (measurements_df["frame"] > first_pipos_frame)
-                & (measurements_df["pi_class"] != "piPOS")
-            )
-            n_overrides = int(mask.sum())
-            if n_overrides > 0:
-                tracks_with_lockin += 1
-                override_count += n_overrides
-            measurements_df.loc[mask, "pi_class"] = "piPOS"
-
-        pipos_after = int((measurements_df["pi_class"] == "piPOS").sum())
-
-        if logger:
-            logger.info(
-                f"piPOS lock-in summary:\n"
-                f"  Tracked detections: {n_tracked_cells}, Untracked: {n_untracked}\n"
-                f"  Tracks with lock-in applied: {tracks_with_lockin}\n"
-                f"  Classifications overridden: {override_count}\n"
-                f"  piPOS count: {pipos_before} -> {pipos_after} "
-                f"(+{pipos_after - pipos_before})"
-            )
-
-        return measurements_df
+        return apply_pipos_lockin(measurements_df, logger)
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -14,7 +14,7 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
 
-from HiTMicTools.tracking.hungarian_tracker import HungarianTracker
+from HiTMicTools.tracking.hungarian_tracker import apply_pipos_lockin
 
 
 class HungarianTrackerV5:
@@ -54,7 +54,7 @@ class HungarianTrackerV5:
         """No-op for API compatibility with CellTracker."""
         pass
 
-    def track_objects(self, measurements_df, volume_bounds=None, logger=None):
+    def track_objects(self, measurements_df, volume_bounds=None, logger=None, **kwargs):
         df = measurements_df.copy()
         if "trackid" in df.columns:
             df = df.drop(columns=["trackid"])
@@ -177,7 +177,7 @@ class HungarianTrackerV5:
 
                 row_ind, col_ind = linear_sum_assignment(cost)
                 for row, col in zip(row_ind, col_ind):
-                    if distance[row, col] <= self.max_distance:
+                    if cost[row, col] <= self.max_distance:
                         tid = eligible[row]
                         idx = current_indices[col]
                         c0, c1, area, major, minor = get(idx)
@@ -516,10 +516,15 @@ class HungarianTrackerV5:
                 lambda tid: resolve(tid) if tid in merge_map else tid
             ).astype(np.int32)
 
+            if "parent_track_id" in df.columns:
+                df["parent_track_id"] = df["parent_track_id"].apply(
+                    lambda tid: resolve(tid) if tid != -1 and tid in merge_map else tid
+                ).astype(np.int32)
+
         if logger:
             logger.info(f"Hungarian v5 track stitching: {n_stitched} merges applied")
 
         return df
 
     def apply_pipos_lockin(self, measurements_df, logger=None):
-        return HungarianTracker.apply_pipos_lockin(self, measurements_df, logger)
+        return apply_pipos_lockin(measurements_df, logger)

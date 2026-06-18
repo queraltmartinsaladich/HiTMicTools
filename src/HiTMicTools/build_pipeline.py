@@ -70,9 +70,8 @@ def build_and_run_pipeline(config_file: str, worklist: str = None):
 
         if tracker_backend == "hungarian":
             hungarian_params = dict(tracking_config.get("parameters", {}))
-            hungarian_version = tracking_config.get(
-                "version", hungarian_params.pop("version", "v2")
-            )
+            params_version = hungarian_params.pop("version", None)
+            hungarian_version = tracking_config.get("version") or params_version or "v2"
             hungarian_params["version"] = hungarian_version
             analysis_wf.load_tracker(
                 tracker_backend="hungarian",

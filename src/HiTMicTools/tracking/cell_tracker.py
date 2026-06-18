@@ -101,6 +101,7 @@ class CellTracker:
         measurements_df: pd.DataFrame,
         volume_bounds: Optional[Tuple[int, int]] = None,
         logger: Optional[logging.Logger] = None,
+        **kwargs,
     ) -> pd.DataFrame:
         """
         Perform tracking on measurements DataFrame.
@@ -184,13 +185,11 @@ class CellTracker:
         Returns:
             DataFrame with tracking results
         """
-        if volume_bounds is None:
-            raise ValueError("Volume bounds must be provided for tracking")
-        # TODO: remove also the forcing of volume_bounds
-        # volume_bounds=(800, 800)
-        # xmax, ymax = volume_bounds
-        xmax = self.xmax
-        ymax = self.ymax
+        if volume_bounds is not None:
+            xmax, ymax = volume_bounds
+        else:
+            xmax = self.xmax
+            ymax = self.ymax
 
         # Initialize and configure tracker
         # Load the config file directly for testing

@@ -112,7 +112,6 @@ class AssignmentScorer:
             dtype=torch.float32,
         )
 
-        self._model.eval()
         with torch.no_grad():
             probs = torch.sigmoid(self._model(feat_tensor)).numpy()
 

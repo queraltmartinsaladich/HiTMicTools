@@ -35,15 +35,14 @@ def prepare_dataframe_for_tracking(
     # Select required columns + features
     all_features = required_cols + features
 
+    tracking_df["z"] = 0  # Default z value for 2D tracking
+
     # Check that all required columns exist
     missing_cols = [col for col in all_features if col not in tracking_df.columns]
     if missing_cols:
         raise ValueError(f"Missing required columns after renaming: {missing_cols}")
-
-    tracking_df["z"] = 0  # Default z value for 2D tracking
     # DF -> numpy array -> btrack objects
     tracking_data = tracking_df[all_features].to_numpy()
-    tracking_df[all_features].to_csv("tracking_data_from_pipeline.csv", index=False)
     # Convert to btrack objects
     return objects_from_array(tracking_data, default_keys=all_features)
 

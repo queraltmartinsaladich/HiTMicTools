@@ -3,6 +3,8 @@ import zipfile
 from pathlib import Path
 from typing import Dict, Any, Union, Optional
 
+from HiTMicTools.utils import update_config
+
 
 class ConfigLoader:
     """Enhanced configuration loader supporting YAML files and zip archives."""
@@ -25,7 +27,7 @@ class ConfigLoader:
 
         # Apply overrides if provided and not empty
         if override_args:
-            config.update(override_args)
+            config = update_config(config, override_args)
         return config
 
     @staticmethod

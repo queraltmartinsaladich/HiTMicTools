@@ -183,12 +183,19 @@ def detect_division_events(
     tracked = fl[(fl["trackid"] != -1) & ~ghost_mask].copy()
     if tracked.empty or "trackid" not in fl.columns:
         return fl, {"n_division_events": 0}
+    if "major_axis_length" not in tracked.columns:
+        raise KeyError("detect_division_events requires 'major_axis_length' column — run feature extraction first")
 
     median_major = tracked["major_axis_length"].median()
     dist_threshold = centroid_dist_frac * median_major
     angle_threshold = np.deg2rad(angle_deg)
 
     frames = sorted(tracked["frame"].unique())
+    if len(frames) > 1 and frames != list(range(frames[0], frames[-1] + 1)):
+        raise ValueError(
+            "detect_division_events requires consecutive frame numbers — "
+            f"gaps detected in frames: {frames}"
+        )
     n_events = 0
 
     for i, frame_t in enumerate(frames[:-1]):
@@ -306,6 +313,11 @@ def reconcile_lineage(
         return fl, {"n_reconciled_divisions": 0}
 
     frames = sorted(tracked["frame"].unique())
+    if len(frames) > 1 and frames != list(range(frames[0], frames[-1] + 1)):
+        raise ValueError(
+            "reconcile_lineage requires consecutive frame numbers — "
+            f"gaps detected in frames: {frames}"
+        )
     n_reconciled = 0
 
     for i, frame_t in enumerate(frames[:-1]):
@@ -556,8 +568,8 @@ def compute_fl_trajectory_features(
     for track_id, group in tracked.groupby("trackid"):
         idx = group.index
         group_sorted = group.sort_values("frame")
-        frames = group_sorted["frame"].values.astype(float)
-        n = len(frames)
+        track_frames = group_sorted["frame"].values.astype(float)
+        n = len(track_frames)
 
         fl.loc[idx, "n_frames_tracked"] = n
 
@@ -565,7 +577,7 @@ def compute_fl_trajectory_features(
             ar_vals = group_sorted["aspect_ratio"].values.astype(float)
             ar_valid = ~np.isnan(ar_vals)
             if ar_valid.sum() >= 2:
-                ar_slope, *_ = linregress(frames[ar_valid], ar_vals[ar_valid])
+                ar_slope, *_ = linregress(track_frames[ar_valid], ar_vals[ar_valid])
                 fl.loc[idx, "aspect_ratio_slope"] = float(ar_slope)
 
         if not has_intensity:
@@ -578,7 +590,7 @@ def compute_fl_trajectory_features(
         fl.loc[idx, "fl_track_std"] = float(np.nanstd(intensities))
 
         if valid.sum() >= 2:
-            slope, *_ = linregress(frames[valid], intensities[valid])
+            slope, *_ = linregress(track_frames[valid], intensities[valid])
             fl.loc[idx, "fl_track_slope"] = float(slope)
 
         # Frame-to-frame intensity change (NaN at track start)
@@ -602,12 +614,12 @@ def compute_fl_trajectory_features(
             lysis_vals = group_sorted["lysis_event_frame"].dropna()
             if not lysis_vals.empty:
                 lysis_f = float(lysis_vals.iloc[0])
-                pre_mask = (frames >= lysis_f - pre_event_window) & (frames < lysis_f)
+                pre_mask = (track_frames >= lysis_f - pre_event_window) & (track_frames < lysis_f)
                 if pre_mask.sum() >= 2:
                     pre_valid = valid & pre_mask
                     if pre_valid.sum() >= 2:
                         pre_slope, *_ = linregress(
-                            frames[pre_valid], intensities[pre_valid]
+                            track_frames[pre_valid], intensities[pre_valid]
                         )
                         fl.loc[idx, "fl_pre_event_slope"] = float(pre_slope)
 
