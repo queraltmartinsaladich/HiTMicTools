@@ -1,12 +1,10 @@
-# HiTMicTools — ASCT_instSeg pipeline config template
-# DEPRECATED — use instSegRod_template.yml or instSegCoc_template.yml instead.
-#   instSegRod: E. coli, P. aeruginosa, Mycobacteria (model_collection_instSegRod.zip)
-#   instSegCoc: S. aureus                             (model_collection_instSegCoc.zip)
-# This file is kept for backwards compatibility only.
+# HiTMicTools — ASCT_instSegCoc pipeline config template
+# Instance segmentation pipeline for cocci (spherical) bacteria
+# (S. aureus)
 #
 # Usage:
-#   hitmic --config instSeg_template.yml
-#   hitmic --config instSeg_template.yml --worklist /path/to/worklist.txt
+#   hitmic --config instSegCoc_template.yml
+#   hitmic --config instSegCoc_template.yml --worklist /path/to/worklist.txt
 
 # ── Input / output ─────────────────────────────────────────────────────────────
 input_data:
@@ -21,27 +19,27 @@ input_data:
 
 # ── Pipeline setup ─────────────────────────────────────────────────────────────
 pipeline_setup:
-  name: ASCT_instSeg
+  name: ASCT_instSegCoc
   reference_channel: 0                  # BF channel index
   pi_channel: 1                         # FL/PI channel index
   align_frames: true
-  method: basicpy_fl                  # background correction: rolling_ball | subtract_mean
+  method: basicpy_fl                    # background correction: rolling_ball | subtract_mean
   focus_correction: true
   parallel_processing: false            # true only for multi-GPU local runs; use SLURM arrays on sciCORE
   num_workers: 1
   tracking: true
   compile_models: false                 # false | "default" | "reduce-overhead" | "max-autotune"
-  species: ecoli                        # ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera | s_aureus
+  species: s_aureus                     # s_aureus
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 models:
-  model_collection: /scicore/home/boeluc00/martin0088/models/model_collection_instSeg.zip
+  model_collection: /scicore/home/boeluc00/martin0088/models/model_collection_instSegCoc.zip
 
-# ── Tracking — instSeg bundle has no config_tracker.yml, must use hungarian ────
+# ── Tracking — instSegCoc bundle has no config_tracker.yml, must use hungarian ─
 tracking:
   backend: hungarian
   parameters:
-    max_distance: 25.0
+    max_distance: 15.0                  # cocci are smaller; tighter threshold than rod default
     gap_bridge_frames: 3
   # reconcile_lineage:             # tune if false-positives near lysis; omit = use defaults
   #   area_drop_frac: 0.40         # min fractional area drop to flag as division parent

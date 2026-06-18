@@ -13,6 +13,8 @@ from HiTMicTools.pipelines.base_pipeline import BasePipeline
 from HiTMicTools.pipelines.ASCT_semSeg import ASCT_semSeg
 from HiTMicTools.pipelines.ASCT_singleFrame import ASCT_singleFrame
 from HiTMicTools.pipelines.ASCT_instSeg import ASCT_instSeg
+from HiTMicTools.pipelines.ASCT_instSegRod import ASCT_instSegRod
+from HiTMicTools.pipelines.ASCT_instSegCoc import ASCT_instSegCoc
 from HiTMicTools.pipelines.ASCT_cellasic import ASCT_cellasic
 from HiTMicTools.pipelines.ASCT_zaslavier import ASCT_zaslavier
 from HiTMicTools.pipelines.oof_detection import OOF_detection
@@ -50,7 +52,10 @@ class PipelineMetadata:
 PIPELINE_REGISTRY: Dict[str, PipelineMetadata] = {
     "ASCT_semSeg": PipelineMetadata(ASCT_semSeg),
     "ASCT_singleFrame": PipelineMetadata(ASCT_singleFrame),
+    # instSeg variants — use instSegRod or instSegCoc; instSeg kept for backwards compat
     "ASCT_instSeg": PipelineMetadata(ASCT_instSeg),
+    "ASCT_instSegRod": PipelineMetadata(ASCT_instSegRod),
+    "ASCT_instSegCoc": PipelineMetadata(ASCT_instSegCoc),
     "ASCT_cellasic": PipelineMetadata(ASCT_cellasic),
     "ASCT_zaslavier": PipelineMetadata(ASCT_zaslavier),
     "oof_detection": PipelineMetadata(OOF_detection),
@@ -103,6 +108,8 @@ __all__ = [
     "ASCT_semSeg",
     "ASCT_singleFrame",
     "ASCT_instSeg",
+    "ASCT_instSegRod",
+    "ASCT_instSegCoc",
     "ASCT_cellasic",
     "ASCT_zaslavier",
     "OOF_detection",
