@@ -531,7 +531,7 @@ class ASCT_instSeg(BasePipeline):
                 fl_measurements, rec_counts = self.division_classifier.predict_divisions(
                     fl_measurements, masks_thw)
             else:
-                fl_measurements, rec_counts = reconcile_lineage(fl_measurements)
+                fl_measurements, rec_counts = reconcile_lineage(fl_measurements, **self._get_reconcile_lineage_kwargs())
             fl_measurements, lys_counts = detect_lysis_events(fl_measurements)
             fl_measurements, fil_counts = detect_filamentation_events(fl_measurements)
             fl_measurements = compute_fl_trajectory_features(fl_measurements)

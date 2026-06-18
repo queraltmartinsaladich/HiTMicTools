@@ -40,6 +40,10 @@ tracking:
   parameters:
     max_distance: 25.0
     gap_bridge_frames: 3
+  # reconcile_lineage:             # tune if false-positives near lysis; omit = use defaults
+  #   area_drop_frac: 0.40         # min fractional area drop to flag as division parent
+  #   area_conservation_tol: 0.30  # tolerance on daughter+parent area vs parent area
+  #   centroid_dist_frac: 2.0      # daughter must be within N × parent major axis length
 
 # ── Extra kwargs forwarded to analyse_image ────────────────────────────────────
 # Any key here is passed as **kwargs to analyse_image.

@@ -115,6 +115,7 @@ def build_and_run_pipeline(config_file: str, worklist: str = None):
 
         # Optionally load learned cost / division models (backwards-compatible)
         analysis_wf.load_learned_trackers(tracking_config)
+        analysis_wf.reconcile_lineage_params = tracking_config.get("reconcile_lineage", {})
 
     else:
         print("Tracking disabled")

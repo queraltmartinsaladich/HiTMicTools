@@ -686,6 +686,14 @@ class BasePipeline(ABC):
         )
         return species_cfg
 
+    def _get_reconcile_lineage_kwargs(self) -> dict:
+        """Return kwargs for reconcile_lineage() from the tracking config.
+
+        Reads the ``reconcile_lineage`` block set by build_pipeline.
+        Returns an empty dict if absent, so the function falls back to its defaults.
+        """
+        return dict(getattr(self, "reconcile_lineage_params", {}))
+
     def _get_morphology_kwargs(self) -> dict:
         """Return species-specific kwargs for apply_instSeg_morphology_corrections.
 
