@@ -29,6 +29,7 @@ Images stored as (2, H, W): channel 0 = BF, channel 1 = FL.  Each crop is
 independently contrast-normalised to [0, 1] using its 1st/99th percentile so
 the classifier sees shape and texture rather than absolute intensity.
 """
+import warnings
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -101,6 +102,13 @@ class TrainingDataExporter:
         """
         df = self._filter(fl_measurements)
         if df.empty:
+            warnings.warn(
+                f"TrainingDataExporter: _filter produced 0 rows from {len(fl_measurements)} input rows. "
+                f"Check track_quality_filter={self.track_quality_filter!r} and "
+                f"exclude_classes={self.exclude_classes!r}. No output written to {output_path!r}.",
+                UserWarning,
+                stacklevel=2,
+            )
             return {"total": 0, "per_class": {}, "skipped_missing_centroid": 0,
                     "skipped_near_border": 0}
 
@@ -179,7 +187,7 @@ class TrainingDataExporter:
             "centroid_0", "centroid_1",
         ) if c in df.columns]
 
-        for row in df[keep_cols + [c for c in [] if c not in keep_cols]].itertuples(index=False):
+        for row in df[keep_cols].itertuples(index=False):
             row_d = row._asdict()
             frame = int(row_d.get("frame", 0))
             cy = row_d.get("centroid_0")  # row index in image

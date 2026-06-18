@@ -194,80 +194,6 @@ def one_hot_encode(image_stack, num_classes):
     return one_hot_encoded
 
 
-def create_array_from_coords_old(
-    df: pd.DataFrame,
-    x_dim: int,
-    y_dim: int,
-    z_dim: int,
-    z_col: str,
-    coord_col: str = "coords_list",
-) -> np.ndarray:
-    """
-    Create a 3D numpy array from coordinates stored in a DataFrame.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing the coordinates and corresponding frame (z) values.
-        x_dim (int): Dimension of the array along the x-axis.
-        y_dim (int): Dimension of the array along the y-axis.
-        z_dim (int): Dimension of the array along the z-axis.
-        z_col (str): Name of the column in the DataFrame containing the frame (z) values.
-        coord_col (str, optional): Name of the column in the DataFrame containing the coordinate tuples (x, y). Default is 'coords_list'.
-
-    Returns:
-        np.ndarray: 3D numpy array with values set to 1 at the specified coordinates.
-    """
-    # Create a black numpy array of dimensions x, y, z
-    array = np.zeros((z_dim, x_dim, y_dim), dtype=float)
-
-    # Iterate over each row in the DataFrame
-    for _, row in df.iterrows():
-        # Get the x, y coordinates and the corresponding frame (z)
-        coords = row[coord_col]
-        frame = row[z_col]
-        # Update the pixel values in the array
-        for coord in coords:
-            x, y = coord
-            array[frame, x, y] = 1
-
-    return array
-
-
-# Image analysis functions
-def border_complexity(regionmask, intensity):
-    """
-    Calculate the border complexity of a region by comparing the perimeter of the region
-    to the perimeter of its convex hull.
-
-    Parameters:
-    regionmask (ndarray): A boolean mask indicating the region of interest.
-    intensity (ndarray): An array of intensity values (unused in this function).
-
-    Returns:
-    float: The border complexity value, defined as the ratio of the region's perimeter
-           to the perimeter of its convex hull.
-    """
-    try:
-        # Find contours
-        contours = find_contours(regionmask, 0.5)
-        if len(contours) == 0:
-            return 0.0
-
-        # Get perimeter length and convex hull length
-        region_perimeter = perimeter(regionmask)
-        hull = convex_hull_image(regionmask)
-        hull_perimeter = perimeter(hull)
-
-        # Calculate the border complexity
-        if hull_perimeter != 0:
-            border_complexity = region_perimeter / hull_perimeter
-        else:
-            border_complexity = 1.0
-    except Exception:
-        border_complexity = 0.0
-
-    return border_complexity
-
-
 ## Auxiliary functions
 def rod_shape_coef(regionmask, intensity):
     """
@@ -401,7 +327,7 @@ def variance_filter(image, kernel_size):
     return variance
 
 
-def dilated_measures(regionmask, intensity, structure=np.ones((5, 5)), iterations=1):
+def dilated_measures(regionmask, intensity, structure=None, iterations=1):
     """
     Calculate the standard deviation of pixel intensities within a region of interest (ROI).
 
@@ -414,6 +340,8 @@ def dilated_measures(regionmask, intensity, structure=np.ones((5, 5)), iteration
     Returns:
     float: The standard deviation of pixel intensities within the ROI.
     """
+    if structure is None:
+        structure = np.ones((5, 5))
     # Ensure regionmask is an 8-bit, single-channel image
     regionmask = regionmask.astype(np.uint8)
 
@@ -434,6 +362,9 @@ def dilated_measures(regionmask, intensity, structure=np.ones((5, 5)), iteration
 # ---------------------------------------------------------------------------
 # Skeleton-based features  (one skeletonize call per ROI for all four)
 # ---------------------------------------------------------------------------
+
+_BRANCH_KERNEL = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int32)
+
 
 def roi_skeleton_features(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndarray:
     """Skeleton-derived morphology and intensity features.
@@ -766,32 +697,3 @@ def roi_radial_profile(regionmask: np.ndarray, intensity: np.ndarray) -> np.ndar
 
     return profile
 
-
-# ---------------------------------------------------------------------------
-# Skeleton branch points  (topology feature — clumps vs single rods)
-# ---------------------------------------------------------------------------
-
-_BRANCH_KERNEL = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int32)
-
-
-def roi_skeleton_branch_points(regionmask: np.ndarray, intensity: np.ndarray) -> int:
-    """Count skeleton branch points in the ROI.
-
-    Skeletonizes the region mask and counts pixels with ≥ 3 skeleton
-    neighbours (8-connected).  A clump of merged cells produces ≥ 1 branch
-    point; a straight single rod has 0.  This is the same metric computed
-    by morphology_corrections to drive R3, but extracted here as a formal
-    feature so it is always present in fl_measurements regardless of whether
-    morphology corrections are applied.
-
-    Returns 0 for masks with fewer than 5 foreground pixels.
-    """
-    if regionmask.sum() < 5:
-        return 0
-    skel = skeletonize(regionmask)
-    if not skel.any():
-        return 0
-    neighbors = _nd_convolve(
-        skel.astype(np.int32), _BRANCH_KERNEL, mode="constant", cval=0
-    )
-    return int((skel & (neighbors >= 3)).sum())

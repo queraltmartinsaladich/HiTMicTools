@@ -93,8 +93,6 @@ def get_timestamps(
                     "abslag_in_s": delta_t_s,
                 }
             )
-        else:
-            continue
     df = pd.DataFrame(timestamps)
 
     df["timestep"] = df["timestep"] - df.loc[df["frame"] == 0, "timestep"].iloc[0]
