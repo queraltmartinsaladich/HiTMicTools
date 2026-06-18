@@ -43,11 +43,11 @@ from HiTMicTools.data_analysis.analysis_tools import (
 from jetraw_tools.image_reader import ImageReader
 
 
-class _InstSegBase(BasePipeline):
+class BaseInstSeg(BasePipeline):
     """
     Shared implementation for instance segmentation pipelines (RF-DETR-based).
 
-    Not a public pipeline — use ASCT_instSegRod or ASCT_instSegCoc instead.
+    Not a registered pipeline — use ASCT_instSegRod or ASCT_instSegCoc instead.
 
     This pipeline processes microscopy images to:
     1. Restore focus in both brightfield and fluorescence channels (optional)
