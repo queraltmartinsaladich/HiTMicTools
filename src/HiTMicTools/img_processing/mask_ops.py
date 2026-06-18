@@ -100,12 +100,19 @@ def map_predictions_to_labels_by_frame(
     if labeled_stack.ndim != 3:
         raise ValueError("labeled_stack must have shape (T, Y, X)")
 
+    unique_frames = sorted(measurements[frame_col].unique())
+    if len(unique_frames) != labeled_stack.shape[0]:
+        raise ValueError(
+            f"Frame count mismatch: stack has {labeled_stack.shape[0]} frames "
+            f"but measurements contain {len(unique_frames)} unique frame values"
+        )
+
     mapped_frames = []
-    for frame_idx in range(labeled_stack.shape[0]):
-        frame_measurements = measurements[measurements[frame_col] == frame_idx]
+    for stack_idx, frame_num in enumerate(unique_frames):
+        frame_measurements = measurements[measurements[frame_col] == frame_num]
         mapped_frames.append(
             map_predictions_to_labels(
-                labeled_stack[frame_idx],
+                labeled_stack[stack_idx],
                 frame_measurements[prediction_col].tolist(),
                 frame_measurements[label_col].tolist(),
                 value_map=value_map,

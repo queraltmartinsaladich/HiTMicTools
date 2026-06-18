@@ -176,7 +176,7 @@ def apply_semSeg_morphology_corrections(
 
     Args:
         fl_measurements: DataFrame with object_class, area, major_axis_length,
-            minor_axis_length, solidity, orientation, centroid-0, centroid-1,
+            minor_axis_length, solidity, orientation, centroid_0, centroid_1,
             frame, label, skeleton_branch_points columns.
         area_clump_frac: Area threshold multiplier for R1.  Default 2.5.
         clump_solidity_max: Solidity ceiling for R1.  Default 0.78.
@@ -222,20 +222,21 @@ def apply_semSeg_morphology_corrections(
     # R2: proximate aligned pair → joint-cell (division detection)
     joint_indices: set = set()
 
-    if enable_division_detection and fl["frame"].nunique() == 1:
-        warnings.warn(
-            "apply_semSeg_morphology_corrections: division detection (R2) requires "
-            "more than one frame but only 1 frame found — R2 skipped. "
-            "If this is unexpected, check that your data has multiple time points.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    if enable_division_detection:
+        if fl["frame"].nunique() == 1:
+            warnings.warn(
+                "apply_semSeg_morphology_corrections: division detection (R2) requires "
+                "more than one frame but only 1 frame found — R2 skipped. "
+                "If this is unexpected, check that your data has multiple time points.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     if enable_division_detection and fl["frame"].nunique() > 1:
         dist_threshold = division_dist_frac * median_major
         angle_threshold = np.deg2rad(division_angle_deg)
 
-        cx_col = "centroid-0" if "centroid-0" in fl.columns else None
-        cy_col = "centroid-1" if "centroid-1" in fl.columns else None
+        cx_col = "centroid_0" if "centroid_0" in fl.columns else None
+        cy_col = "centroid_1" if "centroid_1" in fl.columns else None
 
         if cx_col is not None:
             for _, frame_group in fl.groupby("frame"):
