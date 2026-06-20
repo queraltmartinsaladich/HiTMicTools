@@ -42,6 +42,7 @@ from HiTMicTools.data_analysis.analysis_tools import (
 )
 
 from jetraw_tools.image_reader import ImageReader
+from HiTMicTools.pipelines.diagnostic_writer import DiagnosticWriter
 
 
 class BaseInstSeg(BasePipeline):
@@ -116,6 +117,14 @@ class BaseInstSeg(BasePipeline):
         ip = ImagePreprocessor(img, stack_order="TCXY")
         img = np.zeros((1, 1, 1, 1))  # Remove img to save memory
         img_logger.info(f"Preprocessed image shape: {ip.img.shape}")
+
+        diag = (
+            DiagnosticWriter(self.output_path, movie_name, nFrames)
+            if getattr(self, "diagnostic_mode", False) else None
+        )
+        if diag:
+            diag.save_image_frames("01_raw", "1 — Raw image", ip.img,
+                                   [("BF", reference_channel), ("FL", pi_channel)])
 
         # 2.1 Align frames if required
         if align_frames:
@@ -220,6 +229,11 @@ class BaseInstSeg(BasePipeline):
         # preprocessing already ran fl_normalization)
         ip.build_fl_norm(fl_channel=pi_channel, nframes=range(nFrames))
 
+        if diag:
+            diag.save_image_frames("02_preprocessed",
+                                   "2 — Preprocessed (align + background + focus + species)",
+                                   ip.img, [("BF", reference_channel), ("FL", pi_channel)])
+
         # 3. Single-step instance segmentation + classification
         img_logger.info("3 - Running single-step instance segmentation and classification", show_memory=True, cuda=is_cuda)
 
@@ -252,6 +266,13 @@ class BaseInstSeg(BasePipeline):
             class_ids=all_class_ids,
             class_scores=all_scores,
         )
+
+        if diag:
+            diag.save_segmentation_overlay(
+                "03_segmentation", "3 — Instance segmentation",
+                ip.img, stacked_labeled_masks, all_class_ids,
+                self.class_dict, image_channel=reference_channel,
+            )
 
         # Create RoiAnalyser from labeled masks
         img_logger.info("3.2 - Creating ROI analyser from labeled masks", show_memory=True)
@@ -286,6 +307,14 @@ class BaseInstSeg(BasePipeline):
                 img_logger.info(f"3.4 - Temporal refinement: {n_splits} region(s) split")
             else:
                 img_logger.info("3.4 - Temporal refinement: 0 splits")
+
+        if diag:
+            diag.save_mask_overlay(
+                "04_mask_corrected",
+                "3.3–3.4 — After FL union mask + temporal refinement",
+                img_analyser.img, img_analyser.labeled_mask,
+                image_channel=reference_channel,
+            )
 
         # Build a reference table that maps (frame, label) → class name + score.
         # ScSegmenter guarantees consecutive labels 1..N per frame after NMS/relabeling,
@@ -499,6 +528,14 @@ class BaseInstSeg(BasePipeline):
                         f"(max_gap={max_gap} frames)"
                     )
 
+                if diag:
+                    diag.save_tracking_overlay(
+                        "05_tracked",
+                        "4.5–4.5b — After tracking + gap recovery",
+                        img_analyser.img, img_analyser.labeled_mask,
+                        fl_measurements, image_channel=reference_channel,
+                    )
+
             except Exception as e:
                 img_logger.error(f"Object tracking failed: {e}")
                 # Continue without tracking
@@ -671,6 +708,10 @@ class BaseInstSeg(BasePipeline):
                     ", ".join(f"{cls}={n}" for cls, n in sorted(crop_counts["per_class"].items()))
                 )
             )
+
+        if diag:
+            report = diag.generate_report()
+            img_logger.info(f"Diagnostic report written: {report}")
 
         img_logger.info(f"Analysis completed for {movie_name}", show_memory=True)
         del stacked_labeled_masks, fl_measurements, d_summary, img_analyser

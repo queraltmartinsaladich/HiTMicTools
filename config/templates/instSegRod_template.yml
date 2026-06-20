@@ -30,6 +30,7 @@ pipeline_setup:
   tracking: true
   compile_models: false                 # false | "default" | "reduce-overhead" | "max-autotune"
   species: ecoli                        # ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera
+  diagnostic_mode: false               # true = save per-step QC images to <output>/_diagnostics/
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 models:
