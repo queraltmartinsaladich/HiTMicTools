@@ -1,6 +1,7 @@
 from typing import Any, List, Tuple, Union, Optional, Dict
 import numpy as np
-from scipy.ndimage import distance_transform_edt
+import pandas as pd
+from scipy.ndimage import distance_transform_edt, shift as ndimage_shift
 from skimage.filters import threshold_otsu
 from skimage.measure import label as skimage_label, regionprops
 from skimage.segmentation import watershed
@@ -289,3 +290,132 @@ def refine_masks_temporal(
         lm[t] = curr
 
     return n_splits
+
+
+def recover_gap_masks(
+    labeled_mask: np.ndarray,
+    fl_measurements: "pd.DataFrame",
+    max_gap_frames: int = 2,
+) -> "tuple[pd.DataFrame, int]":
+    """Insert recovered masks for tracks that were bridged across short segmentation gaps.
+
+    After HungarianTracker bridges a 1-N frame gap (via gap_bridge_frames), the
+    trackid is continuous but those frames have no mask or features. This function
+    fills those gaps by translating the nearest known cell mask to the linearly
+    interpolated centroid and appending interpolated feature rows to fl_measurements.
+
+    Skips gaps longer than max_gap_frames, ghost cells, and cases where the
+    translated mask would overlap an existing segmented cell.
+
+    Args:
+        labeled_mask:   (T, S, C, H, W) int array — only [:, 0, 0, :, :] is used,
+                        same convention as refine_masks_temporal.
+        fl_measurements: Post-tracking DataFrame, must have columns:
+                         trackid, frame, label, centroid_0, centroid_1.
+        max_gap_frames: Maximum gap length to recover. Should match
+                        gap_bridge_frames from HungarianTracker. Default 2.
+
+    Returns:
+        (updated_fl_measurements, n_recovered): DataFrame with recovered rows
+        appended (object_class="recovered") and count of inserted cells.
+    """
+    if "trackid" not in fl_measurements.columns:
+        return fl_measurements, 0
+
+    lm = labeled_mask[:, 0, 0, :, :]  # (T, H, W) view — writes propagate in-place
+    T, H, W = lm.shape
+
+    numeric_cols = fl_measurements.select_dtypes(include=np.number).columns.tolist()
+    id_cols = {"frame", "label", "trackid"}
+
+    recovered_rows = []
+
+    for trackid, group in fl_measurements.groupby("trackid"):
+        group_sorted = group.sort_values("frame")
+        frames = group_sorted["frame"].tolist()
+        if len(frames) < 2:
+            continue
+
+        frame_set = set(frames)
+        t_min, t_max = frames[0], frames[-1]
+
+        for t_gap in range(t_min + 1, t_max):
+            if t_gap in frame_set or t_gap >= T:
+                continue
+
+            t_before = max(f for f in frames if f < t_gap)
+            t_after = min(f for f in frames if f > t_gap)
+            if (t_after - t_before - 1) > max_gap_frames:
+                continue
+
+            row_before = group_sorted[group_sorted["frame"] == t_before].iloc[0]
+            row_after = group_sorted[group_sorted["frame"] == t_after].iloc[0]
+
+            # Skip ghost cells — they have dedicated handling
+            if row_before.get("object_class") == "ghost":
+                continue
+
+            alpha = (t_gap - t_before) / (t_after - t_before)
+
+            cy = row_before["centroid_0"] * (1 - alpha) + row_after["centroid_0"] * alpha
+            cx = row_before["centroid_1"] * (1 - alpha) + row_after["centroid_1"] * alpha
+
+            # Source mask: nearest neighbour in time
+            src_row = row_before if alpha <= 0.5 else row_after
+            src_frame = int(src_row["frame"])
+            src_label = int(src_row["label"])
+            src_cy = float(src_row["centroid_0"])
+            src_cx = float(src_row["centroid_1"])
+
+            src_bin = (lm[src_frame] == src_label).astype(np.float32)
+            if not src_bin.any():
+                continue
+
+            dy = cy - src_cy
+            dx = cx - src_cx
+            shifted = ndimage_shift(src_bin, [dy, dx], mode="constant", cval=0.0) > 0.5
+
+            if not shifted.any():
+                continue
+            if np.any(lm[t_gap][shifted] != 0):
+                # Would overlap an existing cell — skip rather than overwrite
+                continue
+
+            new_label = int(lm[t_gap].max()) + 1
+            lm[t_gap][shifted] = new_label
+
+            # Build interpolated feature row
+            new_row: dict = {}
+            for col in numeric_cols:
+                if col in id_cols:
+                    continue
+                v_before = row_before.get(col)
+                v_after = row_after.get(col)
+                try:
+                    new_row[col] = float(v_before) * (1 - alpha) + float(v_after) * alpha
+                except (TypeError, ValueError):
+                    new_row[col] = v_before  # fallback: copy from t_before
+
+            # Copy non-numeric categorical columns from nearest neighbour
+            for col in fl_measurements.columns:
+                if col in new_row or col in id_cols:
+                    continue
+                new_row[col] = src_row.get(col)
+
+            new_row["frame"] = t_gap
+            new_row["label"] = new_label
+            new_row["trackid"] = trackid
+            new_row["object_class"] = "recovered"
+
+            recovered_rows.append(new_row)
+
+    if not recovered_rows:
+        return fl_measurements, 0
+
+    recovered_df = pd.DataFrame(recovered_rows, columns=fl_measurements.columns)
+    updated = (
+        pd.concat([fl_measurements, recovered_df], ignore_index=True)
+        .sort_values(["frame", "trackid"])
+        .reset_index(drop=True)
+    )
+    return updated, len(recovered_rows)

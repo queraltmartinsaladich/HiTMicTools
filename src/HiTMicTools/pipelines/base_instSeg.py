@@ -20,6 +20,7 @@ from HiTMicTools.img_processing.mask_ops import (
     map_predictions_to_labels_by_frame,
     apply_fl_union_mask,
     refine_masks_temporal,
+    recover_gap_masks,
 )
 from HiTMicTools.img_processing.morphology_corrections import (
     apply_instSeg_morphology_corrections,
@@ -481,6 +482,20 @@ class BaseInstSeg(BasePipeline):
                     cost_overrides=cost_overrides,
                 )
                 img_logger.info("4.5 - Object tracking completed successfully")
+
+                # 4.5b Gap mask recovery — fill 1-N frame segmentation gaps
+                max_gap = getattr(self.cell_tracker, "gap_bridge_frames", 2)
+                fl_measurements, n_recovered = recover_gap_masks(
+                    img_analyser.labeled_mask,
+                    fl_measurements,
+                    max_gap_frames=max_gap,
+                )
+                if n_recovered:
+                    img_logger.info(
+                        f"4.5b - Gap recovery: inserted {n_recovered} recovered cells "
+                        f"(max_gap={max_gap} frames)"
+                    )
+
             except Exception as e:
                 img_logger.error(f"Object tracking failed: {e}")
                 # Continue without tracking
