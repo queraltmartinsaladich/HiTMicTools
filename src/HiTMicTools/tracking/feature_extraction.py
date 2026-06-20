@@ -58,6 +58,11 @@ TRIPLET_FEATURE_NAMES = [
     "angle_between_daughters",
     "parent_elongation",
     "parent_area_growth",
+    # tracking-context features (added v2)
+    "d1_is_new_track",     # daughter 1 label absent from parent's frame → likely new cell
+    "d2_is_new_track",     # daughter 2 label absent from parent's frame → likely new cell
+    "parent_track_ended",  # parent label absent from daughters' frame → track-loss event
+    "parent_has_history",  # parent existed at t-2 → established track, not noise
 ]
 
 
@@ -195,9 +200,22 @@ def triplet_features(
     rp_d2, mask_d2: np.ndarray,
     stats: dict,
     rp_parent_prev=None,
+    *,
+    d1_label: int = -1,
+    d2_label: int = -1,
+    parent_label: int = -1,
+    labels_parent_frame=None,
+    labels_daughter_frame=None,
 ) -> np.ndarray:
     """
-    8-dim feature vector for candidate division (parent @ t) → (d1, d2 @ t+1).
+    12-dim feature vector for candidate division (parent @ t) → (d1, d2 @ t+1).
+
+    The first 8 dims are geometric (shape/position).
+    The last 4 are tracking-context features that dramatically improve precision
+    by distinguishing true new-daughter cells from existing nearby cells.
+
+    labels_parent_frame:   set of labels present at the parent's frame (t).
+    labels_daughter_frame: set of labels present at the daughters' frame (t+1).
     """
     med_major = stats["median_major"]
     cy_p, cx_p = rp_parent.centroid
@@ -234,6 +252,24 @@ def triplet_features(
     else:
         area_growth = 0.0
 
+    # Tracking-context features
+    d1_is_new = float(
+        d1_label >= 0
+        and labels_parent_frame is not None
+        and d1_label not in labels_parent_frame
+    )
+    d2_is_new = float(
+        d2_label >= 0
+        and labels_parent_frame is not None
+        and d2_label not in labels_parent_frame
+    )
+    parent_ended = float(
+        parent_label >= 0
+        and labels_daughter_frame is not None
+        and parent_label not in labels_daughter_frame
+    )
+    parent_has_hist = float(rp_parent_prev is not None)
+
     return np.array([
         area_conservation,
         area_symmetry,
@@ -243,6 +279,10 @@ def triplet_features(
         angle,
         elongation,
         float(area_growth),
+        d1_is_new,
+        d2_is_new,
+        parent_ended,
+        parent_has_hist,
     ], dtype=np.float32)
 
 

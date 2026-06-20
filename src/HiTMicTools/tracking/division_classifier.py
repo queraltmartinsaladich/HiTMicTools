@@ -150,6 +150,10 @@ class DivisionClassifier:
                 if len(candidates) < 2:
                     continue
 
+                # Context sets for tracking-aware features
+                labels_parent_frame = set(props_t_prev.keys())
+                labels_daughter_frame = set(props_t.keys())
+
                 # Score all candidate daughter pairs
                 best_score = -1.0
                 best_pair = None
@@ -166,6 +170,9 @@ class DivisionClassifier:
                             props_t[d1], masks[t] == d1,
                             props_t[d2], masks[t] == d2,
                             stats, rp_parent_prev,
+                            d1_label=d1, d2_label=d2, parent_label=label_prev,
+                            labels_parent_frame=labels_parent_frame,
+                            labels_daughter_frame=labels_daughter_frame,
                         )
                         feats_batch.append(feat)
                         pairs_batch.append((d1, d2))
