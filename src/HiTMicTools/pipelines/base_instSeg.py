@@ -1,7 +1,10 @@
 import os
 import gc
+import warnings
 import tifffile
 from typing import Optional, List
+
+warnings.filterwarnings("ignore", message=".*torch.meshgrid.*", category=UserWarning)
 import pandas as pd
 import numpy as np
 

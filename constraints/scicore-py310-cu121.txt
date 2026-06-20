@@ -12,7 +12,7 @@
 # Core scientific stack
 numpy==1.26.4
 scipy==1.13.1
-scikit-learn==1.6.1
+scikit-learn==1.7.0
 scikit-image==0.24.0
 pandas==2.3.3
 
