@@ -139,7 +139,7 @@ def cell_features(rp, stats: dict) -> np.ndarray:
 
 def pair_features(
     rp_i, mask_i: np.ndarray,
-    rp_j, mask_j: np.ndarray,
+    rp_j, mask_j,
     stats: dict,
     rp_i_prev=None,
 ) -> np.ndarray:
@@ -148,6 +148,8 @@ def pair_features(
 
     rp_i_prev: regionprops of cell_i at t-1, used for motion extrapolation.
                Pass None if t == 0.
+    mask_j:    binary mask of cell j, or None to skip O(H×W) IoU computation
+               when centroids are far apart and IoU is guaranteed to be 0.
     """
     med_major = stats["median_major"]
     cy_i, cx_i = rp_i.centroid
@@ -155,28 +157,30 @@ def pair_features(
 
     dist = np.sqrt((cy_i - cy_j) ** 2 + (cx_i - cx_j) ** 2)
 
-    iou = _mask_iou(mask_i, mask_j)
-
-    # Extrapolated overlap: shift mask_i by velocity estimated from t-1 → t
-    if rp_i_prev is not None:
-        cy_prev, cx_prev = rp_i_prev.centroid
-        cy_pred = cy_i + (cy_i - cy_prev)
-        cx_pred = cx_i + (cx_i - cx_prev)
-        extrap_iou = _shifted_iou(mask_i, mask_j, cy_i, cx_i, cy_pred, cx_pred)
-    else:
-        extrap_iou = iou  # no motion info — fall back to static IoU
-
     area_i = rp_i.area
     area_j = rp_j.area
     area_ratio = area_j / area_i if area_i > 0 else 1.0
     delta_area = (area_j - area_i) / area_i if area_i > 0 else 0.0
 
     delta_orient = rp_j.orientation - rp_i.orientation
-    # wrap to [-π/2, π/2]
     while delta_orient > np.pi / 2:
         delta_orient -= np.pi
     while delta_orient < -np.pi / 2:
         delta_orient += np.pi
+
+    if mask_j is None:
+        # Distant pair: skip O(H×W) mask operations; IoU is 0 by construction.
+        iou = 0.0
+        extrap_iou = 0.0
+    else:
+        iou = _mask_iou(mask_i, mask_j)
+        if rp_i_prev is not None:
+            cy_prev, cx_prev = rp_i_prev.centroid
+            cy_pred = cy_i + (cy_i - cy_prev)
+            cx_pred = cx_i + (cx_i - cx_prev)
+            extrap_iou = _shifted_iou(mask_i, mask_j, cy_i, cx_i, cy_pred, cx_pred)
+        else:
+            extrap_iou = iou  # no motion info — fall back to static IoU
 
     return np.array([
         dist / med_major,
