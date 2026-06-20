@@ -87,7 +87,7 @@ def build_and_run_pipeline(config_file: str, worklist: str = None):
                 print(
                     "\033[1mError: btrack package is missing or not properly compiled. "
                     "Please check the installation README at "
-                    "https://github.com/phisanti/HiTMicTools for proper btrack "
+                    "https://github.com/BoeckLab/HiTMicTools for proper btrack "
                     "compilation instructions.\033[0m"
                 )
                 sys.exit(1)

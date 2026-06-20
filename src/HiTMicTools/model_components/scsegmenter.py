@@ -180,7 +180,7 @@ class ScSegmenter(BaseModel):
                 "Install it with:\n"
                 "  pip install 'hitmictools[bacdetr]'\n"
                 "or directly:\n"
-                "  pip install 'bacdetr @ git+https://github.com/phisanti/BacDETRSegm.git@develop#subdirectory=bacdetr'\n\n"
+                "  pip install 'bacdetr @ git+https://github.com/BoeckLab/BacDETRSegm.git@develop#subdirectory=bacdetr'\n\n"
                 "If using an RF-DETR checkpoint, you also need:\n"
                 "  pip install 'hitmictools[rfdetr]'\n"
                 "or directly:\n"

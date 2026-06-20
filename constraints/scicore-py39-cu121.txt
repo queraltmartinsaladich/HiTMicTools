@@ -30,5 +30,5 @@ btrack==0.7.0
 protobuf==6.33.1
 pydantic==2.12.5
 templatematchingpy==1.0.3
-basicpy @ git+https://github.com/phisanti/BaSiCPy_scm.git@c1eb6283508ac31f0206069e497bb13b11d0b4b6
-jetraw-tools @ git+https://github.com/phisanti/jetraw_tools.git@9ebbae2908dbba72074ccc024a7962be744df30f
+basicpy @ git+https://github.com/BoeckLab/BaSiCPy_scm.git@c1eb6283508ac31f0206069e497bb13b11d0b4b6
+jetraw-tools @ git+https://github.com/BoeckLab/jetraw_tools.git@9ebbae2908dbba72074ccc024a7962be744df30f

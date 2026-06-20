@@ -1,0 +1,76 @@
+# Known-good sciCORE environment for HiTMicTools 0.5.14.
+# Python 3.10, CUDA 12.1, GPU nodes (a100 required for JetRaw .ome.p.tiff files).
+#
+# Install with:
+#   pip install -c constraints/scicore-py310-cu121.txt '.[bacdetr,btrack]'
+#
+# JetRaw native library must be configured separately:
+#   - Libraries: /scicore/home/boeluc00/boeluc00/JetRawDPCore/lib/
+#   - Config:    ~/.config/jetraw_tools/jetraw_tools.cfg  ([jetraw_paths] dpcore/jetraw = above path)
+#   - SLURM:     export LD_LIBRARY_PATH="/scicore/home/boeluc00/boeluc00/JetRawDPCore/lib:${LD_LIBRARY_PATH}"
+
+# Core scientific stack
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.6.1
+scikit-image==0.24.0
+pandas==2.3.3
+
+# Deep learning
+torch==2.6.0
+torchvision==0.21.0
+monai==1.5.2
+einops==0.8.2
+timm==1.0.27
+safetensors==0.8.0
+
+# BacDETR dependency chain (undeclared by bacdetr itself — pin carefully)
+# transformers MUST be <5.0: find_pruneable_heads_and_indices removed in 5.0
+transformers==4.57.6
+accelerate==1.14.0
+peft==0.19.1
+supervision==0.29.0.post0
+huggingface_hub==0.36.2
+tokenizers==0.22.2
+
+# Image I/O
+tifffile==2024.12.12
+nd2==0.10.4
+ome-types==0.6.3
+opencv-python==4.11.0.86
+
+# Tracking
+btrack==0.7.0
+
+# Inference export
+onnxruntime==1.19.2
+skl2onnx==1.19.1
+
+# Optimisation (hyperactive / gradient-free)
+hyperactive==4.8.0
+gradient-free-optimizers==1.7.2
+
+# JAX (used by BaSiCPy background correction)
+# WARNING: jaxlib is CPU-only — BaSiCPy falls back to CPU with a warning.
+# To enable GPU acceleration, replace with the CUDA 12 build (from login node):
+#   pip install "jax[cuda12_pip]==0.4.23" \
+#       -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# Then update jaxlib pin here to the resulting jaxlib==0.4.23+cuda12.cudnnXX version.
+jax==0.4.23
+jaxlib==0.4.23
+
+# Misc pipeline deps
+matplotlib==3.9.4
+seaborn==0.13.2
+PyYAML==6.0.3
+joblib==1.5.3
+psutil==7.2.2
+pydantic==2.13.4
+templatematchingpy==1.0.3
+protobuf==7.35.1
+typer==0.25.1
+
+# Git-pinned packages
+basicpy @ git+https://github.com/BoeckLab/BaSiCPy_scm.git@c1eb6283508ac31f0206069e497bb13b11d0b4b6
+jetraw-tools @ git+https://github.com/BoeckLab/jetraw_tools.git@9ebbae2908dbba72074ccc024a7962be744df30f
+bacdetr @ git+https://github.com/BoeckLab/BacDETRSegm.git@67dbb18d5e624a6a4147173b928b75e56f28981a#subdirectory=bacdetr
