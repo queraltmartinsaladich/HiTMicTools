@@ -156,6 +156,18 @@ def apply_fl_union_mask(
         for each added ghost cell — used downstream to assign object_class and
         pi_class by construction (bypassing the classifier).
     """
+    # skimage and per-component indexing require numpy — download CuPy arrays.
+    _cupy_lm = None
+    try:
+        import cupy as cp
+        if isinstance(labeled_mask, cp.ndarray):
+            _cupy_lm = labeled_mask
+            labeled_mask = labeled_mask.get()
+        if isinstance(fl_norm, cp.ndarray):
+            fl_norm = fl_norm.get()
+    except ImportError:
+        pass
+
     # Working views: (T, X, Y)
     fl_work = fl_norm[:, 0, :, :] if fl_norm.ndim == 4 else fl_norm
     lm_work = labeled_mask[:, 0, 0, :, :]  # view — writes propagate to labeled_mask
@@ -193,6 +205,10 @@ def apply_fl_union_mask(
             next_label += 1
             n_added += 1
 
+    if _cupy_lm is not None and n_added > 0:
+        import cupy as cp
+        _cupy_lm[:] = cp.asarray(labeled_mask)
+
     return n_added, ghost_records
 
 
@@ -228,6 +244,16 @@ def refine_masks_temporal(
     Returns:
         Total number of regions split across all frames.
     """
+    # regionprops, watershed, and scalar pixel lookups need numpy — download CuPy.
+    _cupy_lm = None
+    try:
+        import cupy as cp
+        if isinstance(labeled_mask, cp.ndarray):
+            _cupy_lm = labeled_mask
+            labeled_mask = labeled_mask.get()
+    except ImportError:
+        pass
+
     lm = labeled_mask[:, 0, 0, :, :]  # view — writes propagate to labeled_mask
     T, H, W = lm.shape
     n_splits = 0
@@ -289,6 +315,10 @@ def refine_masks_temporal(
 
         lm[t] = curr
 
+    if _cupy_lm is not None and n_splits > 0:
+        import cupy as cp
+        _cupy_lm[:] = cp.asarray(labeled_mask)
+
     return n_splits
 
 
@@ -321,6 +351,16 @@ def recover_gap_masks(
     """
     if "trackid" not in fl_measurements.columns:
         return fl_measurements, 0
+
+    # scipy.ndimage and per-cell mask ops need numpy — download CuPy.
+    _cupy_lm = None
+    try:
+        import cupy as cp
+        if isinstance(labeled_mask, cp.ndarray):
+            _cupy_lm = labeled_mask
+            labeled_mask = labeled_mask.get()
+    except ImportError:
+        pass
 
     lm = labeled_mask[:, 0, 0, :, :]  # (T, H, W) view — writes propagate in-place
     T, H, W = lm.shape
@@ -411,6 +451,10 @@ def recover_gap_masks(
 
     if not recovered_rows:
         return fl_measurements, 0
+
+    if _cupy_lm is not None:
+        import cupy as cp
+        _cupy_lm[:] = cp.asarray(labeled_mask)
 
     recovered_df = pd.DataFrame(recovered_rows, columns=fl_measurements.columns)
     updated = (

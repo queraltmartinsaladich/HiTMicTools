@@ -262,6 +262,7 @@ class BaseInstSeg(BasePipeline):
             stacked_labeled_masks,
             stack_order=("TSCXY", "TXY")
         )
+        img_logger.info("3.2 - ROI analyser ready", show_memory=True)
         fl_norm = ip.fl_norm  # capture before del — used by union mask below
         frame_shifts = getattr(ip, "frame_shifts", None)  # capture before del
 
@@ -283,6 +284,8 @@ class BaseInstSeg(BasePipeline):
             if n_splits:
                 img_analyser.total_rois = int(img_analyser.labeled_mask.max())
                 img_logger.info(f"3.4 - Temporal refinement: {n_splits} region(s) split")
+            else:
+                img_logger.info("3.4 - Temporal refinement: 0 splits")
 
         # Build a reference table that maps (frame, label) → class name + score.
         # ScSegmenter guarantees consecutive labels 1..N per frame after NMS/relabeling,
