@@ -276,13 +276,21 @@ def refine_masks_temporal(
             if curr_label == 0:
                 continue
             region = curr == curr_label
+            # Only inspect prev labels that actually have pixels inside this region —
+            # np.unique(prev[region]) is O(region_area), avoiding O(N_prev × H×W).
+            candidate_prev_labels = set(np.unique(prev[region])) - {0}
+            if len(candidate_prev_labels) < 2:
+                continue  # at most one prev label → cannot split
             seeds: List[Tuple[int, int]] = []
-            for prev_label, (prev_area, (cy, cx)) in prev_info.items():
-                if cy >= H or cx >= W:
+            for prev_label in candidate_prev_labels:
+                info = prev_info.get(prev_label)
+                if info is None:
                     continue
-                if not region[cy, cx]:
+                prev_area, (cy, cx) = info
+                if cy >= H or cx >= W or not region[cy, cx]:
                     continue
-                overlap_frac = float(np.sum(region & (prev == prev_label))) / prev_area
+                # Overlap fraction: pixels of prev_label inside this region / prev_area
+                overlap_frac = float(np.sum(prev[region] == prev_label)) / prev_area
                 if overlap_frac >= min_seed_overlap:
                     seeds.append((cy, cx))
             if len(seeds) >= 2:
