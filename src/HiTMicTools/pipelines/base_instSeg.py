@@ -388,6 +388,7 @@ class BaseInstSeg(BasePipeline):
                 roi_skeleton_features, roi_shape_features,
             ),
             frame_extra_properties=(frame_tubularness,),
+            n_workers=1,
         )
         fl_measurements = fl_measurements.rename(columns={
             "roi_glcm_features-0": "glcm_contrast",
