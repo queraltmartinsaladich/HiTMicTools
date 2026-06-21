@@ -193,11 +193,6 @@ class ScSegmenter(BaseModel):
         )
         self.model.model.model.eval()
 
-        try:
-            self.model.optimize_for_inference()
-        except Exception:
-            pass  # non-fatal: falls back to eager inference
-
         # IMPORTANT: skip torch.compile on MPS due to torch.fx symbolic tracing
         # conflicts with ThreadPoolExecutor in parallel processing.
         if compile_mode and self.device.type != "mps":
