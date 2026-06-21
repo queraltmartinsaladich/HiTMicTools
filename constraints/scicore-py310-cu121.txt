@@ -51,13 +51,11 @@ hyperactive==4.8.0
 gradient-free-optimizers==1.7.2
 
 # JAX (used by BaSiCPy background correction)
-# WARNING: jaxlib is CPU-only — BaSiCPy falls back to CPU with a warning.
-# To enable GPU acceleration, replace with the CUDA 12 build (from login node):
+# jaxlib GPU build — installed 2026-06-21:
 #   pip install "jax[cuda12_pip]==0.4.23" \
 #       -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-# Then update jaxlib pin here to the resulting jaxlib==0.4.23+cuda12.cudnnXX version.
 jax==0.4.23
-jaxlib==0.4.23
+jaxlib==0.4.23+cuda12.cudnn89
 
 # Misc pipeline deps
 matplotlib==3.9.4
