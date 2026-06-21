@@ -293,13 +293,19 @@ class BaseInstSeg(BasePipeline):
         # Remove image-processor to release space
         del ip
 
-        # 3.3 FL union mask — recover ghost cells visible in FL but missed by BF segmentation
-        n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm)
-        if n_ghosts > 0:
-            img_analyser.total_rois = int(img_analyser.labeled_mask.max())
-            img_logger.info(f"3.3 - FL union mask: {n_ghosts} ghost cell(s) added")
+        # 3.3 FL union mask — optionally add PI-positive cells missed by BF segmentation.
+        # Disabled by default: BF is the authoritative source; FL classifies existing
+        # cells as PI+/- and temporal gap recovery is handled post-tracking.
+        ghost_records: list = []
+        if getattr(self, "use_fl_union_mask", False):
+            n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm)
+            if n_ghosts > 0:
+                img_analyser.total_rois = int(img_analyser.labeled_mask.max())
+                img_logger.info(f"3.3 - FL union mask: {n_ghosts} ghost cell(s) added")
+            else:
+                img_logger.info("3.3 - FL union mask: no ghost cells detected")
         else:
-            img_logger.info("3.3 - FL union mask: no ghost cells detected")
+            img_logger.info("3.3 - FL union mask: disabled (BF segmentation only)")
         del fl_norm
 
         # 3.4 Temporal mask refinement — split merged instances using previous-frame centroids

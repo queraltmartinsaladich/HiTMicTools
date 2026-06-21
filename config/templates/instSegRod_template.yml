@@ -31,6 +31,7 @@ pipeline_setup:
   compile_models: false                 # false | "default" | "reduce-overhead" | "max-autotune"
   species: ecoli                        # ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera
   diagnostic_mode: false               # true = save per-step QC images to <output>/_diagnostics/
+  use_fl_union_mask: false             # false (default) = BF segmentation only; true = add PI+ cells not seen in BF (rarely needed, prone to noise-driven oversegmentation)
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 models:
