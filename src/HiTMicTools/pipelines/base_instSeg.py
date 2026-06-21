@@ -308,8 +308,10 @@ class BaseInstSeg(BasePipeline):
             img_logger.info("3.3 - FL union mask: disabled (BF segmentation only)")
         del fl_norm
 
-        # 3.4 Temporal mask refinement — split merged instances using previous-frame centroids
-        if getattr(self, "tracking", False):
+        # 3.4 Temporal mask refinement — split merged instances using previous-frame centroids.
+        # Runs when tracking is enabled OR when temporal_mask_refinement is explicitly set
+        # (defaults True so it runs in segmentation-only mode too).
+        if getattr(self, "tracking", False) or getattr(self, "temporal_mask_refinement", True):
             n_splits = refine_masks_temporal(img_analyser.labeled_mask)
             if n_splits:
                 img_analyser.total_rois = int(img_analyser.labeled_mask.max())
@@ -557,8 +559,10 @@ class BaseInstSeg(BasePipeline):
         # Ghost cells are definitionally piPOS — determine their indices before classifier
         ghost_mask = fl_measurements["object_class"] == "ghost"
 
-        # 4.6 PI classification (if enabled)
-        if self.pi_classifier is not None:
+        # 4.6 PI classification (if enabled and not explicitly skipped).
+        # Set skip_pi_classification: true in config when FL channel is a constitutive
+        # fluorophore (GFP/mCherry) rather than PI — all cells would otherwise score piPOS.
+        if self.pi_classifier is not None and not getattr(self, "skip_pi_classification", False):
             img_logger.info("4.6 - Running PI classification", show_memory=True)
             non_ghost = ~ghost_mask
             if non_ghost.any():
@@ -608,7 +612,7 @@ class BaseInstSeg(BasePipeline):
             )
 
         fl_measurements["file"] = name
-        if self.pi_classifier is not None:
+        if self.pi_classifier is not None and not getattr(self, "skip_pi_classification", False):
             # Generate summary data using the dedicated method
             d_summary = self.generate_data_summary(
                 fl_measurements,
@@ -623,9 +627,8 @@ class BaseInstSeg(BasePipeline):
                 img_logger,
             )
         else:
-            if ghost_mask.any():
-                fl_measurements["pi_class"] = "piNEG"
-                fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
+            fl_measurements["pi_class"] = "piNEG"
+            fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
             d_summary = pd.DataFrame()
 
         # 5. Export data --------------------------------------------
