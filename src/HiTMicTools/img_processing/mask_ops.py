@@ -192,15 +192,16 @@ def apply_fl_union_mask(
         lm_frame = lm_work[t]
         next_label = int(lm_frame.max()) + 1
 
-        for comp_id in range(1, int(fl_labeled.max()) + 1):
-            comp_mask = fl_labeled == comp_id
-            area = int(comp_mask.sum())
-            if area < min_area:
+        # Use regionprops to get per-component coords in O(H×W) total — avoids
+        # the O(N_comp × H×W) cost of `fl_labeled == comp_id` per component.
+        for prop in regionprops(fl_labeled):
+            if prop.area < min_area:
                 continue
-            overlap = int((lm_frame[comp_mask] > 0).sum())
-            if area > 0 and overlap / area > overlap_tol:
+            rows, cols = prop.coords[:, 0], prop.coords[:, 1]
+            overlap = int((lm_frame[rows, cols] > 0).sum())
+            if overlap / prop.area > overlap_tol:
                 continue
-            lm_frame[comp_mask] = next_label
+            lm_frame[rows, cols] = next_label
             ghost_records.append((t, next_label))
             next_label += 1
             n_added += 1
