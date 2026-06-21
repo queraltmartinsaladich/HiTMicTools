@@ -560,10 +560,30 @@ class BaseInstSeg(BasePipeline):
         ghost_mask = fl_measurements["object_class"] == "ghost"
 
         # 4.6 PI classification (if enabled and not explicitly skipped).
-        # Set skip_pi_classification: true in config when FL channel is a constitutive
-        # fluorophore (GFP/mCherry) rather than PI — all cells would otherwise score piPOS.
-        if self.pi_classifier is not None and not getattr(self, "skip_pi_classification", False):
-            img_logger.info("4.6 - Running PI classification", show_memory=True)
+        # Three modes (checked in order):
+        #   1. skip_pi_classification: true  → skip entirely; all cells piNEG (handled below)
+        #   2. pi_fl_threshold: <float>       → FL-presence rule: piPOS if
+        #      rel_mean_intensity > threshold (robust for PI stain AND constitutive fluorophores;
+        #      piPOS = cell visible in both BF and FL, piNEG = BF only)
+        #   3. pi_classifier loaded            → sklearn model (original behaviour)
+        _pi_fl_threshold = getattr(self, "pi_fl_threshold", None)
+        _skip_pi = getattr(self, "skip_pi_classification", False)
+
+        if not _skip_pi and _pi_fl_threshold is not None:
+            img_logger.info(
+                f"4.6 - PI classification (FL-presence threshold={_pi_fl_threshold})",
+                show_memory=True,
+            )
+            non_ghost = ~ghost_mask
+            fl_bright = fl_measurements.loc[non_ghost, "rel_mean_intensity"] > float(_pi_fl_threshold)
+            fl_measurements.loc[non_ghost, "pi_class"] = np.where(fl_bright, "piPOS", "piNEG")
+            fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
+            n_pos = int(fl_bright.sum())
+            n_neg = int(non_ghost.sum()) - n_pos
+            img_logger.info(f"4.6 - piPOS: {n_pos}  piNEG: {n_neg}")
+
+        elif not _skip_pi and self.pi_classifier is not None:
+            img_logger.info("4.6 - Running PI classification (sklearn model)", show_memory=True)
             non_ghost = ~ghost_mask
             if non_ghost.any():
                 predictions = self.pi_classifier.predict(
@@ -612,7 +632,10 @@ class BaseInstSeg(BasePipeline):
             )
 
         fl_measurements["file"] = name
-        if self.pi_classifier is not None and not getattr(self, "skip_pi_classification", False):
+        _pi_classified = not _skip_pi and (
+            _pi_fl_threshold is not None or self.pi_classifier is not None
+        )
+        if _pi_classified:
             # Generate summary data using the dedicated method
             d_summary = self.generate_data_summary(
                 fl_measurements,
