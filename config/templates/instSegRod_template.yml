@@ -32,6 +32,8 @@ pipeline_setup:
   species: ecoli                        # ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera
   diagnostic_mode: false               # true = save per-step QC images to <output>/_diagnostics/
   use_fl_union_mask: false             # false (default) = BF segmentation only; true = add PI+ cells not seen in BF (rarely needed, prone to noise-driven oversegmentation)
+  # pi_snr_threshold: 3.0             # enable PI classification: piPOS if snr > threshold
+  #                                   # snr = (cell_mean - bg) / bg_std; 3.0 for PI staining, 5.0+ for constitutive GFP
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 models:

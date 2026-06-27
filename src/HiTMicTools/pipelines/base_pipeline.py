@@ -335,8 +335,11 @@ class BasePipeline(ABC):
             self.main_logger.info("Loaded model: segmentation (Monai UNet)")
         elif model_type == "cell-classifier":
             model_graph = FlexResNet(**model_configs["model_args"])
+            # config.yml bundles use "model_args" for CellClassifier kwargs (batch_size,
+            # min_size, classes); "inferer_args" is the legacy key — try both.
+            classifier_kwargs = config_dic.get("inferer_args", config_dic.get("model_args", {}))
             self.object_classifier = CellClassifier(
-                model_path, model_graph=model_graph, compile_mode=compile_mode, **config_dic.get("inferer_args", {})
+                model_path, model_graph=model_graph, compile_mode=compile_mode, **classifier_kwargs
             )
             self.main_logger.info("Loaded model: cell_classifier (FlexResNet)")
         elif model_type == "focus-restorer-fl":

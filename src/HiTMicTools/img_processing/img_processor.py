@@ -16,7 +16,6 @@ from .array_ops import (
     get_bit_depth,
 )
 
-
 class ImagePreprocessor:
     """
     A class for preprocessing images.
@@ -245,7 +244,6 @@ class ImagePreprocessor:
         Returns:
             np.ndarray: Aligned image array.
         """
-        # Check if the input image has the correct dimensions
         if (
             img.ndim != 3
             or img.shape[0] != self.frames_size
@@ -287,11 +285,9 @@ class ImagePreprocessor:
         Returns:
             None
         """
-        # Note, in order to collect the image in the self.img, I have to change type before processing
         if convert_32:
             self.img = self.img.astype(np.float32)
 
-        # Assert that nframes, nslices, and nchannels are within valid range
         self.check_size_limit(nframes, self.frames_size, "nframes")
         self.check_size_limit(nslices, self.slices_size, "nslices")
         self.check_size_limit(nchannels, self.channels_size, "nchannels")
@@ -349,11 +345,25 @@ class ImagePreprocessor:
         basic = BaSiC(**kwargs)
         basic.fit(img_to_transform)
 
-        # Use appropriate parameter name based on detected BaSiCPy version
+        # [BASICPY-DIAG] inspect fitted fields
+        try:
+            ff = basic.flatfield
+            df = getattr(basic, "darkfield", None)
+            print(f"[BASICPY-DIAG] flatfield  min={float(ff.min()):.6f} max={float(ff.max()):.6f} mean={float(ff.mean()):.6f} shape={ff.shape}", flush=True)
+            if df is not None and hasattr(df, "min"):
+                print(f"[BASICPY-DIAG] darkfield  min={float(df.min()):.6f} max={float(df.max()):.6f} mean={float(df.mean()):.6f}", flush=True)
+            else:
+                print("[BASICPY-DIAG] darkfield  not estimated (get_darkfield=False)", flush=True)
+            print(f"[BASICPY-DIAG] input      min={float(img_to_transform.min()):.6f} max={float(img_to_transform.max()):.6f} mean={float(img_to_transform.mean()):.6f}", flush=True)
+        except Exception as _e:
+            print(f"[BASICPY-DIAG] inspection failed: {_e}", flush=True)
+
         if self._basicpy_uses_is_timelapse:
             images_transformed = basic.transform(img_to_transform, is_timelapse=is_timelapse)
         else:
             images_transformed = basic.transform(img_to_transform, timelapse=is_timelapse)
+
+        print(f"[BASICPY-DIAG] output     min={float(images_transformed.min()):.6f} max={float(images_transformed.max()):.6f} mean={float(images_transformed.mean()):.6f}", flush=True)
 
         self.img[nframes, nslices, nchannels] = images_transformed
 
@@ -514,6 +524,28 @@ class ImagePreprocessor:
         and the result is stored both in ``self.img`` and as ``self.fl_norm`` for later
         use (e.g. union-mask construction in the segmentation step).
 
+        Operator execution order (fixed by registry insertion order):
+
+        BF channel (modifies self.img):
+            1. clahe                  – local contrast enhancement first
+            2. hessian_tubularness    – detect structure on contrast-balanced image
+            3. directional_tophat
+            4. anisotropic_diffusion
+            5. rl_deconvolution
+            6. circular_tophat
+            7. dog_enhancement
+            8. unsharp_mask
+            9. phase_congruency       – recover remaining low-contrast edges last
+           10. log_enhancement
+
+        FL channel (modifies self.img — classifier input):
+            1. fl_background_subtraction  – rolling-ball background removal
+            2. fl_denoise                 – NL-means noise reduction
+
+        FL normalization (builds self.fl_norm — union-mask only, never classifier):
+            1. fl_clahe       – CLAHE applied here only; preserves PI+/PI- intensity ratio
+            2. fl_normalization – percentile clip to [0, 1]
+
         Args:
             nframes: Frame indices to process.
             nslices: Slice indices to process.
@@ -525,21 +557,34 @@ class ImagePreprocessor:
             None  (modifies ``self.img`` in-place)
         """
         from .species_preprocessing import (
+            apply_clahe,
             apply_hessian_tubularness,
             apply_directional_tophat,
             apply_anisotropic_diffusion,
             apply_rl_deconvolution,
             apply_phase_congruency,
+            apply_log_enhancement,
+            apply_circular_tophat,
+            apply_dog_enhancement,
+            apply_unsharp_mask,
             normalize_fluorescence,
         )
 
-        # Operator registry: name → callable
+        # Operator registry: name → callable (insertion order = execution order)
+        # Order: dog_enhancement (coccal bandpass first) → clahe (local contrast on DoG output)
+        # → structure detection (hessian, tophat) → noise smoothing (diffusion, RL)
+        # → band-pass enhancement (circular_tophat, unsharp) → edge recovery (phase_congruency, log)
         _bf_operators = {
-            "hessian_tubularness": apply_hessian_tubularness,
-            "directional_tophat": apply_directional_tophat,
+            "dog_enhancement":       apply_dog_enhancement,
+            "clahe":                 apply_clahe,
+            "hessian_tubularness":   apply_hessian_tubularness,
+            "directional_tophat":    apply_directional_tophat,
             "anisotropic_diffusion": apply_anisotropic_diffusion,
-            "rl_deconvolution": apply_rl_deconvolution,
-            "phase_congruency": apply_phase_congruency,
+            "rl_deconvolution":      apply_rl_deconvolution,
+            "circular_tophat":       apply_circular_tophat,
+            "unsharp_mask":          apply_unsharp_mask,
+            "phase_congruency":      apply_phase_congruency,
+            "log_enhancement":       apply_log_enhancement,
         }
 
         self.check_size_limit(nframes, self.frames_size, "nframes")
@@ -559,20 +604,47 @@ class ImagePreprocessor:
 
             self.img[t, s, bf_channel, :, :] = frame
 
-        # FL channel normalisation
+        # FL channel operators — applied in-place to self.img.
+        # fl_clahe is intentionally absent here: CLAHE is a non-linear spatial
+        # transform that corrupts PI intensity relationships needed for classification.
+        # It is applied to fl_norm only (see below) to improve union-mask sensitivity.
         if fl_channel is not None:
+            from .species_preprocessing import (
+                apply_fl_rolling_ball,
+                apply_fl_nlmeans,
+                apply_fl_clahe,
+            )
+            _fl_operators = {
+                "fl_background_subtraction": apply_fl_rolling_ball,
+                "fl_denoise":                apply_fl_nlmeans,
+            }
+            fl_index_table = stack_indexer(nframes, nslices, [fl_channel])
+            for t, s, _c in fl_index_table:
+                frame = self.img[t, s, fl_channel, :, :].astype(np.float32)
+                for op_name, op_fn in _fl_operators.items():
+                    op_cfg = species_config.get(op_name, {})
+                    if not op_cfg.get("enabled", False):
+                        continue
+                    kwargs = {k: v for k, v in op_cfg.items() if k != "enabled"}
+                    frame = op_fn(frame, **kwargs)
+                self.img[t, s, fl_channel, :, :] = frame
+
+            # fl_normalization: build a separate [0,1] copy for union-mask use only.
+            # fl_clahe is applied here, before percentile clipping, to boost local
+            # contrast for mask construction without affecting the classifier input.
+            # self.img is not modified — the PI classifier sees rolling-ball-corrected
+            # intensities where PI+/PI- ratio is preserved.
             fl_cfg = species_config.get("fl_normalization", {})
+            clahe_cfg = species_config.get("fl_clahe", {})
             if fl_cfg.get("enabled", False):
                 fl_kwargs = {k: v for k, v in fl_cfg.items() if k != "enabled"}
-                fl_index_table = stack_indexer(nframes, nslices, [fl_channel])
                 fl_norm_stack = self.img[:, :, fl_channel, :, :].copy().astype(np.float32)
                 for t, s, _c in fl_index_table:
-                    norm = normalize_fluorescence(
-                        self.img[t, s, fl_channel, :, :], **fl_kwargs
-                    )
-                    self.img[t, s, fl_channel, :, :] = norm
-                    fl_norm_stack[t, s] = norm
-                # Expose as a convenience attribute for the union-mask step
+                    frame_for_norm = self.img[t, s, fl_channel, :, :].astype(np.float32)
+                    if clahe_cfg.get("enabled", False):
+                        clahe_kwargs = {k: v for k, v in clahe_cfg.items() if k != "enabled"}
+                        frame_for_norm = apply_fl_clahe(frame_for_norm, **clahe_kwargs)
+                    fl_norm_stack[t, s] = normalize_fluorescence(frame_for_norm, **fl_kwargs)
                 self.fl_norm = fl_norm_stack
 
     def build_fl_norm(

@@ -29,6 +29,8 @@ pipeline_setup:
   tracking: true
   compile_models: false
   species: ecoli                         # ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera | s_aureus
+  # pi_snr_threshold: 3.0             # enable PI classification: piPOS if snr > threshold
+  #                                   # snr = (cell_mean - bg) / bg_std; 3.0 for PI staining, 5.0+ for constitutive GFP
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 models:

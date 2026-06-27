@@ -13,6 +13,7 @@ from HiTMicTools.resource_management.sysutils import (
     )
 from HiTMicTools.resource_management.reserveresource import ReserveResource
 from HiTMicTools.pipelines.base_pipeline import BasePipeline
+from HiTMicTools.pipelines.diagnostic_writer import DiagnosticWriter
 from HiTMicTools.img_processing.img_processor import ImagePreprocessor
 from HiTMicTools.img_processing.array_ops import convert_image
 from HiTMicTools.img_processing.img_ops import measure_background_intensity
@@ -131,6 +132,14 @@ class ASCT_semSeg(BasePipeline):
         img = np.zeros((1, 1, 1, 1))  # Remove img to save memory
         img_logger.info(f"Preprocessed image shape: {ip.img.shape}")
 
+        diag = (
+            DiagnosticWriter(self.output_path, movie_name, nFrames)
+            if getattr(self, "diagnostic_mode", False) else None
+        )
+        if diag:
+            diag.save_image_frames("01_raw", "1 — Raw image", ip.img,
+                                   [("BF", reference_channel), ("FL", pi_channel)])
+
         # 2.1 Align frames if required
         if align_frames:
             img_logger.info("2.1 - Aligning frames in the stack", show_memory=True)
@@ -233,6 +242,10 @@ class ASCT_semSeg(BasePipeline):
         # Ensure fl_norm is built for the union-mask step (idempotent if species
         # preprocessing already ran fl_normalization)
         ip.build_fl_norm(fl_channel=pi_channel, nframes=range(nFrames))
+        if diag:
+            diag.save_image_frames("02_preprocessed",
+                                   "2 — Preprocessed (align + background + focus + species)",
+                                   ip.img, [("BF", reference_channel), ("FL", pi_channel)])
 
         # 3.1 Segment Image --------------------------------------------
         img_logger.info("3.1 - Image segmentation", show_memory=True, cuda=is_cuda)
@@ -267,14 +280,24 @@ class ASCT_semSeg(BasePipeline):
         img_analyser.clean_binmask(min_pixel_size=20)
         img_analyser.get_labels()
         img_logger.info(f"{img_analyser.total_rois} objects found in segmentation")
+        if diag:
+            diag.save_mask_overlay(
+                "03_segmentation", "3.1–3.2 — Semantic segmentation (UNet labels)",
+                img_analyser.img, img_analyser.labeled_mask,
+                image_channel=reference_channel,
+            )
 
         # 3.3 FL union mask — recover ghost cells visible in FL but missed by BF segmentation
-        n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm)
-        if n_ghosts > 0:
-            img_analyser.total_rois = int(img_analyser.labeled_mask.max())
-            img_logger.info(f"3.3 - FL union mask: {n_ghosts} ghost cell(s) added")
+        ghost_records = []
+        if getattr(self, "use_fl_union_mask", False):
+            n_ghosts, ghost_records = apply_fl_union_mask(img_analyser.labeled_mask, fl_norm)
+            if n_ghosts > 0:
+                img_analyser.total_rois = int(img_analyser.labeled_mask.max())
+                img_logger.info(f"3.3 - FL union mask: {n_ghosts} ghost cell(s) added")
+            else:
+                img_logger.info("3.3 - FL union mask: no ghost cells detected")
         else:
-            img_logger.info("3.3 - FL union mask: no ghost cells detected")
+            img_logger.info("3.3 - FL union mask: disabled (use_fl_union_mask: false)")
         del fl_norm
 
         # 3.3b Temporal mask refinement — split merged instances using previous-frame centroids
@@ -284,6 +307,14 @@ class ASCT_semSeg(BasePipeline):
             if n_splits:
                 img_analyser.total_rois = int(img_analyser.labeled_mask.max())
                 img_logger.info(f"3.3b - Temporal refinement: {n_splits} region(s) split")
+
+        if diag:
+            diag.save_mask_overlay(
+                "04_mask_corrected",
+                "3.3–3.3b — After FL union mask + temporal refinement",
+                img_analyser.img, img_analyser.labeled_mask,
+                image_channel=reference_channel,
+            )
 
         # 3.4 Classify ROIs
         img_logger.info("3.4 - Classifying ROIs", show_memory=True, cuda=is_cuda)
@@ -390,6 +421,17 @@ class ASCT_semSeg(BasePipeline):
             fl_measurements["background"], axis=0
         )
 
+        # Background-subtracted signal and SNR.
+        fl_measurements["mean_signal"] = (
+            fl_measurements["mean_intensity"] - fl_measurements["background"]
+        ).clip(lower=0)
+        fl_measurements["max_signal"] = (
+            fl_measurements["max_intensity"] - fl_measurements["background"]
+        ).clip(lower=0)
+        fl_measurements["snr"] = fl_measurements["mean_signal"] / (
+            fl_measurements["bg_std"] + 1e-6
+        )
+
         if align_frames and frame_shifts is not None:
             drift_df = pd.DataFrame({
                 "frame": np.arange(frame_shifts.shape[0]),
@@ -456,9 +498,25 @@ class ASCT_semSeg(BasePipeline):
         # Ghost cells are definitionally piPOS — determine their indices before classifier
         ghost_mask = fl_measurements["object_class"] == "ghost"
 
-        # 4.6 PI classification (if enabled)
-        if self.pi_classifier is not None:
-            img_logger.info("4.6 - Running PI classification", show_memory=True)
+        # 4.6 PI classification (three modes: skip, SNR threshold, sklearn model)
+        _pi_snr_threshold = getattr(self, "pi_snr_threshold", None)
+        _skip_pi = getattr(self, "skip_pi_classification", False)
+
+        if not _skip_pi and _pi_snr_threshold is not None:
+            img_logger.info(
+                f"4.6 - PI classification (SNR threshold={_pi_snr_threshold})",
+                show_memory=True,
+            )
+            non_ghost = ~ghost_mask
+            fl_bright = fl_measurements.loc[non_ghost, "snr"] > float(_pi_snr_threshold)
+            fl_measurements.loc[non_ghost, "pi_class"] = np.where(fl_bright, "piPOS", "piNEG")
+            fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
+            n_pos = int(fl_bright.sum())
+            n_neg = int(non_ghost.sum()) - n_pos
+            img_logger.info(f"4.6 - piPOS: {n_pos}  piNEG: {n_neg}")
+
+        elif not _skip_pi and self.pi_classifier is not None:
+            img_logger.info("4.6 - Running PI classification (sklearn model)", show_memory=True)
             non_ghost = ~ghost_mask
             if non_ghost.any():
                 predictions = self.pi_classifier.predict(
@@ -478,7 +536,11 @@ class ASCT_semSeg(BasePipeline):
                     fl_measurements, logger=img_logger
                 )
 
-            fl_measurements["file"] = name
+        fl_measurements["file"] = name
+        _pi_classified = not _skip_pi and (
+            _pi_snr_threshold is not None or self.pi_classifier is not None
+        )
+        if _pi_classified:
             # Generate summary data using the dedicated method
             d_summary = self.generate_data_summary(
                 fl_measurements,
@@ -493,10 +555,8 @@ class ASCT_semSeg(BasePipeline):
                 img_logger,
             )
         else:
-            if ghost_mask.any():
-                fl_measurements["pi_class"] = "piNEG"
-                fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
-            fl_measurements["file"] = name
+            fl_measurements["pi_class"] = "piNEG"
+            fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
             d_summary = pd.DataFrame()
 
         # 4.7 Track event detection + FL trajectory (requires final pi_class)
@@ -566,8 +626,8 @@ class ASCT_semSeg(BasePipeline):
                 },
             )
 
-            # If PI classifier was used, create a second channel for PI classification
-            if self.pi_classifier is not None:
+            # If PI classification was run, create a second channel
+            if _pi_classified:
                 # Map PI classes to the labeled mask
                 pi_class_mask = map_predictions_to_labels_by_frame(
                     label_slice,
@@ -620,6 +680,9 @@ class ASCT_semSeg(BasePipeline):
                     ", ".join(f"{cls}={n}" for cls, n in sorted(crop_counts["per_class"].items()))
                 )
             )
+
+        if diag:
+            diag.generate_report()
 
         img_logger.info(f"Analysis completed for {movie_name}", show_memory=True)
         del prob_map, img, fl_measurements, d_summary, img_analyser

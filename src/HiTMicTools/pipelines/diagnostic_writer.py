@@ -61,6 +61,11 @@ def _norm_gray(frame: np.ndarray, plo: float = 1.0, phi: float = 99.0) -> np.nda
     return np.clip((frame.astype(np.float32) - lo) / (hi - lo), 0.0, 1.0)
 
 
+def _norm_gray_fl(frame: np.ndarray) -> np.ndarray:
+    """FL-tuned normalization: p1→p99.9, preserving bright sparse signal on dark BG."""
+    return _norm_gray(frame, plo=1.0, phi=99.9)
+
+
 def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[float, float, float]:
     """Pure-Python HSV → RGB (avoids matplotlib import at module level)."""
     if s == 0.0:
@@ -142,19 +147,25 @@ class DiagnosticWriter:
     # Low-level PNG writers
     # ------------------------------------------------------------------
 
-    def _write_gray(self, frame: np.ndarray, path: Path) -> None:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+    def _write_gray(self, frame: np.ndarray, path: Path, fl: bool = False) -> None:
+        import tifffile
+        from PIL import Image as _PILImage
 
-        normed = _norm_gray(frame)
-        fig, ax = plt.subplots(figsize=(6, 6), dpi=120)
-        ax.axis("off")
-        ax.imshow(normed, cmap="gray", vmin=0, vmax=1,
-                  interpolation="nearest", aspect="equal")
-        fig.tight_layout(pad=0)
-        fig.savefig(path, dpi=120, bbox_inches="tight", pad_inches=0.01)
-        plt.close(fig)
+        # Primary: full-resolution float32 TIFF — lossless, original intensity scale
+        tifffile.imwrite(
+            str(path.with_suffix(".tiff")),
+            frame.astype(np.float32),
+            compression="deflate",
+        )
+        # Secondary: small uint8 PNG for report.html thumbnails (browsers cannot display TIFF)
+        normed = _norm_gray_fl(frame) if fl else _norm_gray(frame)
+        u8 = (normed * 255).astype(np.uint8)
+        thumb = _PILImage.fromarray(u8, mode="L")
+        if max(thumb.size) > 200:
+            r = 200 / max(thumb.size)
+            thumb = thumb.resize((int(thumb.width * r), int(thumb.height * r)),
+                                 _PILImage.LANCZOS)
+        thumb.save(str(path.with_suffix(".png")))
 
     def _write_overlay(
         self,
@@ -163,12 +174,13 @@ class DiagnosticWriter:
         path: Path,
         label_rgba: Optional[Dict[int, Tuple]] = None,
         default_alpha: float = 0.45,
+        fl_background: bool = False,
     ) -> None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        normed = _norm_gray(image)
+        normed = _norm_gray_fl(image) if fl_background else _norm_gray(image)
         fig, ax = plt.subplots(figsize=(6, 6), dpi=120)
         ax.axis("off")
         ax.imshow(normed, cmap="gray", vmin=0, vmax=1,
@@ -208,14 +220,49 @@ class DiagnosticWriter:
         img = _to_numpy(image_tscxy)
         entries = []
         for ch_name, ch_idx in channel_specs:
+            is_fl = ch_name.upper() == "FL"
             files = []
             for f in self.probe_frames:
                 frame = _frame_2d(img, f, slice_idx, ch_idx)
                 fname = f"{step_id}_{ch_name}_f{f:03d}.png"
-                self._write_gray(frame, self.root / fname)
+                self._write_gray(frame, self.root / fname, fl=is_fl)
                 files.append(fname)
             entries.append({"channel": ch_name, "files": files})
         self._steps.append({"step_id": step_id, "label": step_label, "entries": entries})
+
+    def _write_class_json(
+        self,
+        mask: np.ndarray,
+        all_class_ids_frame: Optional[list],
+        class_dict: Optional[Dict[int, str]],
+        path: Path,
+    ) -> None:
+        """JSON sidecar: normalized centroid lists per class, for the interactive viewer."""
+        import json
+        from skimage.measure import regionprops
+
+        H, W = mask.shape
+        label_to_class: Dict[int, str] = {}
+        if all_class_ids_frame is not None and class_dict is not None:
+            for idx, cid in enumerate(all_class_ids_frame):
+                label_to_class[idx + 1] = class_dict.get(int(cid), "unknown")
+
+        by_class: Dict[str, list] = {}
+        for prop in regionprops(mask):
+            cls = label_to_class.get(prop.label, "unknown")
+            cy, cx = prop.centroid
+            by_class.setdefault(cls, []).append([round(cx / W, 4), round(cy / H, 4)])
+
+        colors = {
+            cls: [round(v, 3) for v in self.CLASS_RGBA.get(cls, self.CLASS_RGBA["unknown"])]
+            for cls in by_class
+        }
+        with open(path, "w") as fh:
+            json.dump({
+                "cells": by_class,
+                "colors": colors,
+                "label_to_class": {str(k): v for k, v in label_to_class.items()},
+            }, fh, separators=(",", ":"))
 
     def save_segmentation_overlay(
         self,
@@ -227,11 +274,16 @@ class DiagnosticWriter:
         class_dict: Optional[Dict[int, str]] = None,
         image_channel: int = 0,
         image_slice: int = 0,
+        fl_background: bool = False,
     ) -> None:
-        """Save BF + mask overlay, cells colored by detected class.
+        """Save image + mask overlay, cells colored by detected class.
 
         If ``all_class_ids`` / ``class_dict`` are not provided every cell is
         assigned a random hue (same as ``save_mask_overlay``).
+        Set ``fl_background=True`` when the background channel is fluorescence
+        (applies p1→p99.9 normalization instead of the default p1→p99).
+        Also writes a ``{step_id}_classes_f*.json`` sidecar with per-class
+        centroid data for interactive class filtering in gen_diag_viewer.py.
         """
         img = _to_numpy(image_tscxy)
         mask = _mask_txy(_to_numpy(labeled_mask))
@@ -242,16 +294,31 @@ class DiagnosticWriter:
             frame_mask = mask[f] if f < mask.shape[0] else mask[-1]
 
             label_rgba: Optional[Dict[int, Tuple]] = None
-            if all_class_ids is not None and class_dict is not None and f < len(all_class_ids):
+            cids_frame = all_class_ids[f] if (all_class_ids is not None and f < len(all_class_ids)) else None
+            if cids_frame is not None and class_dict is not None:
                 label_rgba = {}
-                for idx, cid in enumerate(all_class_ids[f]):
-                    cls = class_dict.get(int(cid), "unknown") if class_dict else "unknown"
+                for idx, cid in enumerate(cids_frame):
+                    cls = class_dict.get(int(cid), "unknown")
                     label_rgba[idx + 1] = self.CLASS_RGBA.get(cls, self.CLASS_RGBA["unknown"])
 
             fname = f"{step_id}_overlay_f{f:03d}.png"
             self._write_overlay(frame_img, frame_mask, self.root / fname,
-                                 label_rgba=label_rgba)
+                                 label_rgba=label_rgba, fl_background=fl_background)
             files.append(fname)
+
+            # uint16 instance label TIFF — exact pixel labels, full resolution
+            import tifffile as _tifffile
+            _tifffile.imwrite(
+                str(self.root / f"{step_id}_labels_f{f:03d}.tiff"),
+                frame_mask.astype(np.uint16),
+                compression="deflate",
+            )
+
+            # JSON sidecar for interactive class filter in viewer
+            self._write_class_json(
+                frame_mask, cids_frame, class_dict,
+                self.root / f"{step_id}_classes_f{f:03d}.json",
+            )
 
         self._steps.append({
             "step_id": step_id,
@@ -282,6 +349,14 @@ class DiagnosticWriter:
             self._write_overlay(frame_img, frame_mask, self.root / fname,
                                  label_rgba=label_rgba, default_alpha=alpha)
             files.append(fname)
+
+            # uint16 instance label TIFF — exact pixel labels, full resolution
+            import tifffile as _tifffile
+            _tifffile.imwrite(
+                str(self.root / f"{step_id}_labels_f{f:03d}.tiff"),
+                frame_mask.astype(np.uint16),
+                compression="deflate",
+            )
 
         self._steps.append({
             "step_id": step_id,

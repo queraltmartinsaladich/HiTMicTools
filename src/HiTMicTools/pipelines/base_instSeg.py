@@ -33,6 +33,7 @@ from HiTMicTools.tracking.track_events import (
     detect_division_events,
     reconcile_lineage,
     detect_lysis_events,
+    apply_lysis_lockin,
     detect_filamentation_events,
     compute_fl_trajectory_features,
 )
@@ -237,6 +238,10 @@ class BaseInstSeg(BasePipeline):
                                    "2 — Preprocessed (align + background + focus + species)",
                                    ip.img, [("BF", reference_channel), ("FL", pi_channel)])
 
+        if getattr(self, "preprocessing_only", False):
+            img_logger.info("preprocessing_only=true — stopping after stage 02 (no segmentation)", show_memory=True)
+            return
+
         # 3. Single-step instance segmentation + classification
         img_logger.info("3 - Running single-step instance segmentation and classification", show_memory=True, cuda=is_cuda)
 
@@ -275,6 +280,11 @@ class BaseInstSeg(BasePipeline):
                 "03_segmentation", "3 — Instance segmentation",
                 ip.img, stacked_labeled_masks, all_class_ids,
                 self.class_dict, image_channel=reference_channel,
+            )
+            diag.save_segmentation_overlay(
+                "03_segmentation_FL", "3 — Instance segmentation (FL)",
+                ip.img, stacked_labeled_masks, all_class_ids,
+                self.class_dict, image_channel=pi_channel, fl_background=True,
             )
 
         # Create RoiAnalyser from labeled masks
@@ -469,6 +479,20 @@ class BaseInstSeg(BasePipeline):
             fl_measurements["background"], axis=0
         )
 
+        # Background-subtracted signal and SNR.
+        # mean_signal: per-cell mean intensity above the background floor (clipped to 0).
+        # snr: how many noise sigmas (bg_std) the signal sits above that floor.
+        # bg_std comes from measure_background_intensity; both columns land in the output CSV.
+        fl_measurements["mean_signal"] = (
+            fl_measurements["mean_intensity"] - fl_measurements["background"]
+        ).clip(lower=0)
+        fl_measurements["max_signal"] = (
+            fl_measurements["max_intensity"] - fl_measurements["background"]
+        ).clip(lower=0)
+        fl_measurements["snr"] = fl_measurements["mean_signal"] / (
+            fl_measurements["bg_std"] + 1e-6
+        )
+
         if align_frames and frame_shifts is not None:
             drift_df = pd.DataFrame({
                 "frame": np.arange(frame_shifts.shape[0]),
@@ -483,17 +507,20 @@ class BaseInstSeg(BasePipeline):
             )
 
         # 4.4 Morphology-based label corrections
-        img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
-        fl_measurements, morph_counts = apply_instSeg_morphology_corrections(
-            fl_measurements,
-            **self._get_morphology_kwargs()
-        )
-        img_logger.info(
-            f"4.4 - Morphology corrections: "
-            f"{morph_counts['filamented_to_long']} filamented→long, "
-            f"{morph_counts['lysed_to_lyse']} lysed→lyse, "
-            f"{morph_counts['merged_to_clump']} single-cell→clump"
-        )
+        if getattr(self, "morphology_corrections", True):
+            img_logger.info("4.4 - Applying morphology corrections", show_memory=False)
+            fl_measurements, morph_counts = apply_instSeg_morphology_corrections(
+                fl_measurements,
+                **self._get_morphology_kwargs()
+            )
+            img_logger.info(
+                f"4.4 - Morphology corrections: "
+                f"{morph_counts['filamented_to_long']} filamented→long, "
+                f"{morph_counts['lysed_to_lyse']} lysed→lyse, "
+                f"{morph_counts['merged_to_clump']} single-cell→clump"
+            )
+        else:
+            img_logger.info("4.4 - Morphology corrections: disabled")
 
         # 4.5 Object tracking (if enabled)
         if self.tracking and self.cell_tracker is not None:
@@ -562,20 +589,21 @@ class BaseInstSeg(BasePipeline):
         # 4.6 PI classification (if enabled and not explicitly skipped).
         # Three modes (checked in order):
         #   1. skip_pi_classification: true  → skip entirely; all cells piNEG (handled below)
-        #   2. pi_fl_threshold: <float>       → FL-presence rule: piPOS if
-        #      rel_mean_intensity > threshold (robust for PI stain AND constitutive fluorophores;
-        #      piPOS = cell visible in both BF and FL, piNEG = BF only)
+        #   2. pi_snr_threshold: <float>      → SNR rule: piPOS if snr > threshold.
+        #      snr = (cell_mean - bg) / bg_std — dimensionless, robust after rolling-ball
+        #      subtraction (rel_mean_intensity denominator → ~0 post-bg-subtract).
+        #      Recommended: 3.0 for PI staining; 5.0+ for constitutive GFP.
         #   3. pi_classifier loaded            → sklearn model (original behaviour)
-        _pi_fl_threshold = getattr(self, "pi_fl_threshold", None)
+        _pi_snr_threshold = getattr(self, "pi_snr_threshold", None)
         _skip_pi = getattr(self, "skip_pi_classification", False)
 
-        if not _skip_pi and _pi_fl_threshold is not None:
+        if not _skip_pi and _pi_snr_threshold is not None:
             img_logger.info(
-                f"4.6 - PI classification (FL-presence threshold={_pi_fl_threshold})",
+                f"4.6 - PI classification (SNR threshold={_pi_snr_threshold})",
                 show_memory=True,
             )
             non_ghost = ~ghost_mask
-            fl_bright = fl_measurements.loc[non_ghost, "rel_mean_intensity"] > float(_pi_fl_threshold)
+            fl_bright = fl_measurements.loc[non_ghost, "snr"] > float(_pi_snr_threshold)
             fl_measurements.loc[non_ghost, "pi_class"] = np.where(fl_bright, "piPOS", "piNEG")
             fl_measurements.loc[ghost_mask, "pi_class"] = "piPOS"
             n_pos = int(fl_bright.sum())
@@ -621,6 +649,7 @@ class BaseInstSeg(BasePipeline):
             else:
                 fl_measurements, rec_counts = reconcile_lineage(fl_measurements, **self._get_reconcile_lineage_kwargs())
             fl_measurements, lys_counts = detect_lysis_events(fl_measurements)
+            fl_measurements = apply_lysis_lockin(fl_measurements)
             fl_measurements, fil_counts = detect_filamentation_events(fl_measurements)
             fl_measurements = compute_fl_trajectory_features(fl_measurements)
             img_logger.info(
@@ -633,7 +662,7 @@ class BaseInstSeg(BasePipeline):
 
         fl_measurements["file"] = name
         _pi_classified = not _skip_pi and (
-            _pi_fl_threshold is not None or self.pi_classifier is not None
+            _pi_snr_threshold is not None or self.pi_classifier is not None
         )
         if _pi_classified:
             # Generate summary data using the dedicated method

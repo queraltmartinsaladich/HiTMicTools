@@ -452,6 +452,35 @@ def detect_lysis_events(fl_measurements: pd.DataFrame) -> Tuple[pd.DataFrame, Di
 
 
 # ---------------------------------------------------------------------------
+# Lysis lock-in
+# ---------------------------------------------------------------------------
+
+def apply_lysis_lockin(fl_measurements: pd.DataFrame) -> pd.DataFrame:
+    """Set object_class to 'lyse' for all frames at or after lysis_event_frame.
+
+    Must be called after detect_lysis_events.  Corrects the case where
+    majority-vote smoothing in refine_tracks reverted post-lysis frames back
+    to 'single-cell' — death is irreversible, so a detected lysis event locks
+    all subsequent frames for that track.  The corrected object_class propagates
+    into the output CSV and _labels.tiff (distinct label value = distinct color).
+
+    Args:
+        fl_measurements: DataFrame with lysis_event_frame and object_class columns.
+
+    Returns:
+        Updated DataFrame.
+    """
+    fl = fl_measurements.copy()
+    if "lysis_event_frame" not in fl.columns:
+        return fl
+    lysis_rows = fl["lysis_event_frame"].notna()
+    if not lysis_rows.any():
+        return fl
+    fl.loc[lysis_rows, "object_class"] = "lyse"
+    return fl
+
+
+# ---------------------------------------------------------------------------
 # Filamentation trajectory detection
 # ---------------------------------------------------------------------------
 

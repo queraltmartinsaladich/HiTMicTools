@@ -224,6 +224,7 @@ def measure_background_intensity(
         use_cupy = False
 
     bck_intensities = []
+    bck_stds = []
     frames = []
     for frame in range(img.shape[0]):
         # Ensure mask has the same number of dimensions as the image for broadcasting
@@ -233,19 +234,22 @@ def measure_background_intensity(
         # Apply mask to the image: set object pixels to NaN
         masked_img = xp.where(frame_mask == 0, frame_img, xp.nan)
 
-        # Calculate the quantile of the background intensity
+        # Calculate the quantile and std of the background intensity
         if use_cupy:
             # CuPy doesn't have nanquantile, so convert to numpy for this operation
             masked_img_cpu = cp.asnumpy(masked_img)
             bck_intensity = float(np.nanquantile(masked_img_cpu, quantile))
+            bck_std = float(np.nanstd(masked_img_cpu))
         else:
             bck_intensity = float(np.nanquantile(masked_img, quantile))
+            bck_std = float(np.nanstd(masked_img))
 
         bck_intensities.append(bck_intensity)
+        bck_stds.append(bck_std)
         frames.append(frame)
 
     # Create a Pandas DataFrame to store the results
-    bck_fl_df = pd.DataFrame({"frame": frames, "background": bck_intensities})
+    bck_fl_df = pd.DataFrame({"frame": frames, "background": bck_intensities, "bg_std": bck_stds})
     return bck_fl_df
 
 

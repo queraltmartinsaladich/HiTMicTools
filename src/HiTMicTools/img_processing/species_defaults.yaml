@@ -5,12 +5,14 @@
 # `species_config_path` in the pipeline_setup config section.
 #
 # Operator reference (see species_preprocessing.py for full docs):
-#   hessian_tubularness   – Frangi vesselness; bridges hollow-centre artefact
-#   directional_tophat    – Multi-orientation white top-hat; enhances filaments
-#   anisotropic_diffusion – Perona-Malik diffusion; smooths halos, preserves edges
-#   rl_deconvolution      – Richardson-Lucy; reverses out-of-focus coccal blur
-#   phase_congruency      – Log-Gabor phase congruency; low-contrast edge detection
-#   fl_normalization      – Percentile-clip FL channel to [0, 1]
+#   hessian_tubularness      – Frangi vesselness; bridges hollow-centre artefact
+#   directional_tophat       – Multi-orientation white top-hat; enhances filaments
+#   anisotropic_diffusion    – Perona-Malik diffusion; smooths halos, preserves edges
+#   rl_deconvolution         – Richardson-Lucy; reverses out-of-focus coccal blur
+#   phase_congruency         – Log-Gabor phase congruency; low-contrast edge detection
+#   fl_background_subtraction – Rolling-ball background subtraction on FL channel
+#   fl_denoise               – Non-local means denoising on FL channel
+#   fl_normalization         – Percentile-clip FL to [0,1] for union-mask only (NOT classifier input)
 #
 # morphology_corrections: thresholds for apply_instSeg_morphology_corrections().
 #   spaghetti_ar      – AR floor for R1 (filamentation → long).
@@ -20,6 +22,38 @@
 #
 # Species identifiers (case-insensitive in pipeline dispatch):
 #   ecoli | p_aeruginosa | m_tuberculosis | m_abscessus | m_chimaera | s_aureus
+#
+# Changelog
+# ---------
+# s_aureus      – fl_background_subtraction radius 50→30 (sigma=25 too coarse for
+#                 fine-scale autofluorescence background; 30=σ15 better tracks local variation)
+# m_abscessus   – hessian_tubularness disabled; anisotropic_diffusion n_iter=10,kappa=25;
+#                 phase_congruency enabled nscale=3, min_wavelength=2.5, blend=0.35
+# m_tuberculosis – phase_congruency added at blend_weight=0.3 (conservative; pending
+#                  visual validation — disable if it fights anisotropic_diffusion output)
+# p_aeruginosa  – tophat disabled (gradient at p50 gap=14px); hessian disabled (no improvement);
+#                 aniso n_iter=5 kappa=20; dog sigma_low=1.5 sigma_high=4 blend=0.2;
+#                 phase_congruency nscale=4 blend=0.2; order: diffusion → dog → phase_congruency
+# m_abscessus   – fl_denoise enabled (h=3, patch=7, dist=21) — cellasic images noisy
+# m_abscessus   – fl_background_subtraction mask_hotlines=true (bright horizontal line in cellasic
+#                 FL channel inflated Gaussian background estimate → inverted signal, p99=9; masking
+#                 hot rows with median before blur, then subtracting from original, fixes this)
+# m_chimaera    – fl_background_subtraction radius 30→100 (r=30 was subtracting signal; 100 stays
+#                 above sparse-dot scale); fl_clahe pending p99 check from this run
+# ecoli         – fl_background_subtraction radius 50→100 (r=50 fits under small rods, subtracts
+#                 signal; r=100 safe above cell scale); fl_clahe added (clip_limit=1.5, tile_grid=16)
+# architecture  – fl_clahe moved out of _fl_operators (self.img path) into fl_normalization block
+#                 (fl_norm path only). CLAHE is non-linear and corrupts PI+/PI- intensity ratio
+#                 needed for classification; it is now applied only to fl_norm for union-mask
+#                 contrast, not to the array the PI classifier reads.
+# s_aureus      – fl_background_subtraction radius 30→100 (r=30 inside cluster scale ~15px; 100
+#                 safe above clusters, below background ramp); fl_clahe added (clip_limit=1.0,
+#                 tile_grid=8 — Staph PI signal stronger, lower clip)
+# ecoli, p_aeruginosa, s_aureus, m_chimaera – clahe added (clip_limit=1.5, tile_grid_size=8); local contrast before hessian
+# p_aeruginosa  – fl_background_subtraction radius 50→100 (same root cause as ecoli: r=50 fits under
+#                 rod-scale cells, subtracts signal, leaving bg≈0 and inflating SNR; r=100 safe above cell scale)
+# p_aeruginosa  – fl_clahe added (clip_limit=1.5, tile_grid=16) matching ecoli; rod scale similar
+# All others    – unchanged
 
 species:
 
@@ -27,6 +61,10 @@ species:
   # Key challenges: refractive hollow-centre artefact, high-density swarming,
   # stress-induced filamentation (§11.1)
   ecoli:
+    clahe:
+      enabled: true
+      clip_limit: 1.5
+      tile_grid_size: 8
     hessian_tubularness:
       enabled: true
       sigmas: [1, 2, 3]
@@ -40,6 +78,18 @@ species:
       enabled: false
     phase_congruency:
       enabled: false
+    fl_background_subtraction:
+      enabled: true
+      radius: 100
+    fl_denoise:
+      enabled: false
+      h: 3.0
+      patch_size: 7
+      patch_distance: 21
+    fl_clahe:
+      enabled: true
+      clip_limit: 1.5
+      tile_grid_size: 16
     fl_normalization:
       enabled: true
       percentile_low: 1.0
@@ -54,22 +104,52 @@ species:
   # Key challenges: OMV puncta, EPS matrix, elongated filaments/spaghetti forms,
   # pre-lytic punctate condensation (§11.2)
   p_aeruginosa:
+    clahe:
+      enabled: true
+      clip_limit: 1.5
+      tile_grid_size: 8
     hessian_tubularness:
       enabled: true
-      sigmas: [1, 2]
+      sigmas: [2, 3, 4]
       black_ridges: true
       blend_weight: 0.3
     directional_tophat:
-      enabled: true
-      scales: [3, 7, 11]
-      n_orientations: 8
-      blend_weight: 0.5
-    anisotropic_diffusion:
       enabled: false
+      scales: [7, 11]
+      n_orientations: 8
+      blend_weight: 0.2
+    anisotropic_diffusion:
+      enabled: true
+      n_iter: 5
+      kappa: 20.0
+      gamma: 0.1
     rl_deconvolution:
       enabled: false
+    dog_enhancement:
+      enabled: true
+      sigma_low: 3.0
+      sigma_high: 10.0
+      blend_weight: 0.25
     phase_congruency:
+      enabled: true
+      nscale: 4
+      norient: 6
+      min_wavelength: 3.0
+      mult: 2.1
+      sigma_onf: 0.55
+      blend_weight: 0.3
+    fl_background_subtraction:
+      enabled: true
+      radius: 100
+    fl_denoise:
       enabled: false
+      h: 3.0
+      patch_size: 7
+      patch_distance: 21
+    fl_clahe:
+      enabled: true
+      clip_limit: 1.5
+      tile_grid_size: 16
     fl_normalization:
       enabled: true
       percentile_low: 1.0
@@ -83,6 +163,9 @@ species:
   # ── Mycobacterium tuberculosis ────────────────────────────────────────────
   # Key challenges: serpentine cording, mycolic-acid diffraction halos,
   # ghost cells (optical ghosting), coccoid persistence forms (§11.4)
+  # phase_congruency added conservatively (blend_weight=0.3) to recover ghost-cell
+  # and halo edges that anisotropic_diffusion smooths but does not enhance.
+  # PENDING visual validation — disable if output fights diffusion smoothing.
   m_tuberculosis:
     hessian_tubularness:
       enabled: true
@@ -99,7 +182,21 @@ species:
     rl_deconvolution:
       enabled: false
     phase_congruency:
+      enabled: true
+      nscale: 4
+      norient: 6
+      min_wavelength: 3.0
+      mult: 2.1
+      sigma_onf: 0.55
+      blend_weight: 0.3
+    fl_background_subtraction:
+      enabled: true
+      radius: 50
+    fl_denoise:
       enabled: false
+      h: 3.0
+      patch_size: 7
+      patch_distance: 21
     fl_normalization:
       enabled: true
       percentile_low: 1.0
@@ -113,20 +210,41 @@ species:
   # ── Mycobacterium abscessus ───────────────────────────────────────────────
   # Key challenges: hydrophobic 3-D aggregation, rough/smooth phenotypic disparity,
   # plate-grid segmentation failures, beaded polymorphism (§11.3)
+  # hessian_tubularness disabled — was causing background gradient in new pipeline.
+  # anisotropic_diffusion added at low iterations (n_iter=10, kappa=25) to homogenise
+  #   background noise while preserving rod edges; kappa lower than m_tuberculosis
+  #   (25 vs 30) because abscessus rods have less pronounced edges.
+  # phase_congruency at intermediate rod scale (nscale=3, min_wavelength=2.5, blend=0.35).
   m_abscessus:
     hessian_tubularness:
-      enabled: true
-      sigmas: [1, 2, 3]
-      black_ridges: true
-      blend_weight: 0.3
+      enabled: false
     directional_tophat:
       enabled: false
     anisotropic_diffusion:
-      enabled: false
+      enabled: true
+      n_iter: 10
+      kappa: 25.0
+      gamma: 0.1
     rl_deconvolution:
       enabled: false
     phase_congruency:
-      enabled: false
+      enabled: true
+      nscale: 3
+      norient: 6
+      min_wavelength: 2.5
+      mult: 2.1
+      sigma_onf: 0.55
+      blend_weight: 0.35
+    fl_background_subtraction:
+      enabled: true
+      radius: 50
+      mask_hotlines: true
+      hotline_percentile: 99.5
+    fl_denoise:
+      enabled: true
+      h: 3.0
+      patch_size: 7
+      patch_distance: 21
     fl_normalization:
       enabled: true
       percentile_low: 1.0
@@ -139,6 +257,10 @@ species:
   # Key challenges: meniscus distortions, dense 3-D biofilm, low phase contrast
   # of slow-growing cell walls (§11.5)
   m_chimaera:
+    clahe:
+      enabled: false
+      clip_limit: 1.5
+      tile_grid_size: 8
     hessian_tubularness:
       enabled: false
     directional_tophat:
@@ -155,6 +277,18 @@ species:
       mult: 2.1
       sigma_onf: 0.55
       blend_weight: 0.5
+    fl_background_subtraction:
+      enabled: true
+      radius: 100
+    fl_denoise:
+      enabled: false
+      h: 3.0
+      patch_size: 7
+      patch_distance: 21
+    fl_clahe:
+      enabled: false
+      clip_limit: 1.5
+      tile_grid_size: 16
     fl_normalization:
       enabled: true
       percentile_low: 1.0
@@ -166,7 +300,13 @@ species:
   # ── Staphylococcus aureus ─────────────────────────────────────────────────
   # Key challenges: 3-D grape-like clusters, sub-resolution edge diffraction,
   # out-of-focus blur rings from multi-planar stacking (§11.6)
+  # RL kept at safe psf_sigma=1.0, n_iter=30 (1.5/50 caused ringing artefacts).
+  # phase_congruency at coccal scale (nscale=3, min_wavelength=2.0, blend=0.3).
   s_aureus:
+    clahe:
+      enabled: true
+      clip_limit: 1.5
+      tile_grid_size: 16
     hessian_tubularness:
       enabled: false
     directional_tophat:
@@ -174,11 +314,46 @@ species:
     anisotropic_diffusion:
       enabled: false
     rl_deconvolution:
-      enabled: true
+      enabled: false
       psf_sigma: 1.0
       n_iter: 30
     phase_congruency:
+      enabled: true
+      nscale: 2
+      norient: 6
+      min_wavelength: 2.0
+      mult: 2.1
+      sigma_onf: 0.55
+      blend_weight: 0.15
+    log_enhancement:
       enabled: false
+      sigma: 4.0
+      blend_weight: 0.3
+    circular_tophat:
+      enabled: false
+      radius: 5
+      blend_weight: 0.3
+    dog_enhancement:
+      enabled: true
+      sigma_low: 2.0
+      sigma_high: 5.0
+      blend_weight: 0.4
+    unsharp_mask:
+      enabled: false
+      sigma: 4.0
+      blend_weight: 0.3
+    fl_background_subtraction:
+      enabled: true
+      radius: 100
+    fl_denoise:
+      enabled: false
+      h: 3.0
+      patch_size: 7
+      patch_distance: 21
+    fl_clahe:
+      enabled: true
+      clip_limit: 1.0
+      tile_grid_size: 8
     fl_normalization:
       enabled: true
       percentile_low: 1.0
